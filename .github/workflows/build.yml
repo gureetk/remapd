@@ -1,0 +1,44 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  daemon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test against a fake remote
+        run: python3 daemon/test/run_tests.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build for Android (static ARM binaries)
+        run: |
+          pip install ziglang
+          sh daemon/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: remapd
+          path: |
+            daemon/remapd
+            daemon/remapd-arm64
+            daemon/examples/*.conf
+
+  app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Test and build the app
+        run: ./gradlew :app:testReleaseUnitTest :app:assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: remapd-app
+          path: app/build/outputs/apk/release/*.apk

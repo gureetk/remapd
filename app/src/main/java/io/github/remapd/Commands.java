@@ -1,0 +1,82 @@
+package io.github.remapd;
+
+/**
+ * The shell commands the app runs through Shizuku, and how it reads their
+ * output. Plain Java (no Android classes) so it can be tested on a computer.
+ */
+final class Commands {
+    static final String DIR = "/data/local/tmp";
+    static final String BIN = DIR + "/remapd";
+    static final String CONF = DIR + "/remapd.conf";
+    static final String LOG = DIR + "/remapd.log";
+
+    /** Starts remapd unless it's already running. */
+    static final String ENSURE =
+            "if [ ! -x " + BIN + " ]; then echo 'remapd isn'\\''t in " + DIR + " yet.'; exit 1; fi; "
+                    + "if " + BIN + " status >/dev/null 2>&1; then echo 'remapd is already running.'; "
+                    + "else " + BIN + " start " + CONF + "; fi";
+
+    static final String START = BIN + " start " + CONF;
+    static final String STOP = BIN + " stop";
+
+    /** remapd's status line, then @@-markers the app reads, then the end of the log. */
+    static final String STATUS =
+            "if [ ! -x " + BIN + " ]; then echo @@missing; "
+                    + "elif [ ! -f " + CONF + " ]; then echo @@noconf; "
+                    + "else " + BIN + " status; echo @@$?; fi; "
+                    + "echo @@log; tail -n 15 " + LOG + " 2>/dev/null";
+
+    /** Wraps a command so stderr ends up in the output too. */
+    static String[] shell(String command) {
+        return new String[]{"sh", "-c", "exec 2>&1; " + command};
+    }
+
+    /** STATUS output, split up. */
+    static final class Status {
+        /** "missing", "noconf", "0" (running), "1" (not running), or "" if unknown. */
+        final String marker;
+        final String text;
+        final String log;
+
+        Status(String marker, String text, String log) {
+            this.marker = marker;
+            this.text = text;
+            this.log = log;
+        }
+
+        boolean running() {
+            return marker.equals("0");
+        }
+    }
+
+    static Status parseStatus(String output) {
+        StringBuilder text = new StringBuilder();
+        StringBuilder log = new StringBuilder();
+        String marker = "";
+        boolean inLog = false;
+        for (String line : output.split("\n", -1)) {
+            if (line.equals("@@log")) {
+                inLog = true;
+            } else if (inLog) {
+                log.append(line).append('\n');
+            } else if (line.startsWith("@@")) {
+                marker = line.substring(2).trim();
+            } else if (!line.trim().isEmpty()) {
+                text.append(line).append('\n');
+            }
+        }
+        return new Status(marker, text.toString().trim(), log.toString().trim());
+    }
+
+    /** One line saying what an ENSURE run did. */
+    static String summarize(String output) {
+        if (output.contains("running in the background")) {
+            return "started";
+        }
+        String trimmed = output.trim();
+        return trimmed.isEmpty() ? "" : trimmed.split("\n", 2)[0];
+    }
+
+    private Commands() {
+    }
+}

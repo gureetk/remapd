@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- Android TV banners only come in xhdpi. -->
+    <issue id="IconMissingDensityFolder" severity="ignore" />
+    <!-- The app keeps nothing worth backing up; allowBackup="false" covers older versions. -->
+    <issue id="DataExtractionRules" severity="ignore" />
+    <!-- androidx.annotation stays at 1.3.0, the version Shizuku's API uses (compile-only). -->
+    <issue id="GradleDependency">
+        <ignore path="build.gradle" />
+    </issue>
+</lint>

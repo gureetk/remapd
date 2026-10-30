@@ -1,0 +1,55 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Release signing: put storeFile, storePassword, keyAlias and keyPassword in
+// keystore.properties (not committed). Without it, release builds use the
+// debug key, which is fine for trying it out.
+def keystoreProps = new Properties()
+def keystorePropsFile = rootProject.file('keystore.properties')
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+
+android {
+    namespace 'io.github.remapd'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'io.github.remapd'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig keystorePropsFile.exists() ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+}
+
+dependencies {
+    implementation 'dev.rikka.shizuku:api:13.1.5'
+    implementation 'dev.rikka.shizuku:provider:13.1.5'
+    compileOnly 'androidx.annotation:annotation:1.3.0'   // the version Shizuku's API uses
+    testImplementation 'junit:junit:4.13.2'
+}

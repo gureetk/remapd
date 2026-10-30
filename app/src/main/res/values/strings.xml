@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">remapd</string>
+    <string name="subtitle">Keeps your remote\'s extra buttons working. remapd starts by itself whenever Shizuku starts, including after a restart, and whenever you open this app.</string>
+
+    <string name="shizuku_ok">Shizuku: running, and this app may use it.</string>
+    <string name="shizuku_ask">Shizuku: running. Allow this app to use it:</string>
+    <string name="shizuku_denied">Shizuku: running, but access was denied. Allow remapd in Shizuku\'s list of apps.</string>
+    <string name="shizuku_stopped">Shizuku: not running. Open it and start it, and turn on Start on boot there so it starts by itself after a restart.</string>
+    <string name="shizuku_missing">Shizuku isn\'t installed. Install it first; thedjchi\'s version can start itself after a restart.</string>
+    <string name="shizuku_old">Shizuku: this version is too old. Update Shizuku.</string>
+
+    <string name="remapd_unknown">remapd: can\'t check without Shizuku.</string>
+    <string name="remapd_missing">remapd isn\'t in /data/local/tmp yet. Copy remapd and remapd.conf there with adb first.</string>
+    <string name="remapd_noconf">There\'s no /data/local/tmp/remapd.conf yet. Copy your config there with adb first.</string>
+
+    <string name="allow">Allow access</string>
+    <string name="open_shizuku">Open Shizuku</string>
+    <string name="start">Start or restart remapd</string>
+    <string name="stop">Stop remapd</string>
+    <string name="refresh">Refresh</string>
+    <string name="working">Working…</string>
+    <string name="recent_log">Recent log:</string>
+
+    <string name="reason_opened">app opened</string>
+    <string name="reason_shizuku">Shizuku connected</string>
+    <string name="reason_allowed">access allowed</string>
+    <string name="reason_boot">restart</string>
+    <string name="started">remapd started.</string>
+    <string name="last_none">remapd hasn\'t been started from here yet.</string>
+    <string name="last_format">Last check: %1$s (%2$s): %3$s</string>
+
+    <string name="error_no_access">Shizuku isn\'t running, or this app isn\'t allowed to use it yet.</string>
+    <string name="error_shizuku">Shizuku couldn\'t run the command: %1$s</string>
+    <string name="error_command">The command failed: %1$s</string>
+</resources>

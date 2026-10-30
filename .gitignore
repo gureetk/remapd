@@ -1,0 +1,26 @@
+# Gradle / Android Studio
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Signing (never commit keys)
+keystore.properties
+*.jks
+*.keystore
+
+# remapd build outputs
+daemon/remapd
+daemon/remapd-arm64
+daemon/remapd-native
+daemon/test/remapd-test
+daemon/test/sandbox/
+daemon/test/fake/
+daemon/test/fakebin/
+daemon/test/*.so
+daemon/test/results.txt
+__pycache__/
