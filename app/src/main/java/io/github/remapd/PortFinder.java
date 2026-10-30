@@ -3,6 +3,8 @@ package io.github.remapd;
 import android.content.Context;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
+import android.os.Build;
+import android.os.SystemClock;
 import android.util.Log;
 
 import java.net.InetAddress;
@@ -18,20 +20,39 @@ import java.util.concurrent.TimeUnit;
 /**
  * Finds the port of this TV's wireless debugging. adbd picks a new port each
  * time wireless debugging starts and announces it on the local network
- * (mDNS) as an "_adb-tls-connect._tcp" service, like adb on a computer finds
- * it. Other devices on the network announce theirs too, so only a service on
- * one of this TV's own addresses counts.
+ * (mDNS) as an "_adb-tls-connect._tcp" service named "adb-<serial>-<id>",
+ * like adb on a computer finds it. Other devices announce theirs too, so only
+ * services on one of this TV's own addresses count, and the name that worked
+ * last time is looked up first.
  */
 final class PortFinder implements AutoCloseable {
     private static final String TAG = "remapd";
     private static final String SERVICE_TYPE = "_adb-tls-connect._tcp";
+    private static final long RESOLVE_TIMEOUT_MS = 5000;
 
+    /** A wireless debugging service on this TV. */
+    static final class Found {
+        final String name;
+        final int port;
+
+        Found(String name, int port) {
+            this.name = name;
+            this.port = port;
+        }
+    }
+
+    private final Context context;
     private final NsdManager nsd;
-    private final LinkedBlockingQueue<Integer> ports = new LinkedBlockingQueue<>();
-    private final ArrayDeque<NsdServiceInfo> toResolve = new ArrayDeque<>();   // guarded by this
-    private boolean resolving;   // guarded by this; NsdManager resolves one service at a time
-    private boolean discovering;   // guarded by this
-    private boolean closed;   // guarded by this
+    private final String preferredName;
+    private final LinkedBlockingQueue<Found> found = new LinkedBlockingQueue<>();
+
+    // Guarded by this. NsdManager resolves one service at a time, so they're queued.
+    private final ArrayDeque<NsdServiceInfo> toResolve = new ArrayDeque<>();
+    private NsdManager resolver;
+    private NsdManager.ResolveListener resolving;   // the current one, or null
+    private long resolveStarted;
+    private boolean discovering;
+    private boolean closed;
     private volatile boolean failed;
 
     private final NsdManager.DiscoveryListener discovery = new NsdManager.DiscoveryListener() {
@@ -62,7 +83,11 @@ final class PortFinder implements AutoCloseable {
         @Override
         public void onServiceFound(NsdServiceInfo info) {
             synchronized (PortFinder.this) {
-                toResolve.add(info);
+                if (info.getServiceName().equals(preferredName)) {
+                    toResolve.addFirst(info);
+                } else {
+                    toResolve.addLast(info);
+                }
                 resolveNext();
             }
         }
@@ -72,18 +97,25 @@ final class PortFinder implements AutoCloseable {
         }
     };
 
-    PortFinder(Context context) {
-        nsd = context.getSystemService(NsdManager.class);
+    /** @param preferredName the service that was this TV's last time, or null */
+    PortFinder(Context context, String preferredName) {
+        this.context = context;
+        this.nsd = context.getSystemService(NsdManager.class);
+        this.resolver = nsd;
+        this.preferredName = preferredName;
     }
 
     void start() {
         nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discovery);
     }
 
-    /** This TV's wireless debugging port, or -1 if none turned up in time. */
-    int await(long timeoutMs) throws InterruptedException {
-        Integer port = ports.poll(timeoutMs, TimeUnit.MILLISECONDS);
-        return port == null ? -1 : port;
+    /** The next service found on this TV, or null if none turned up in time. */
+    Found await(long timeoutMs) throws InterruptedException {
+        Found f = found.poll(timeoutMs, TimeUnit.MILLISECONDS);
+        synchronized (this) {
+            giveUpOnSlowResolve();
+        }
+        return f;
     }
 
     /** Discovery couldn't start, so nothing will turn up. */
@@ -108,36 +140,70 @@ final class PortFinder implements AutoCloseable {
         }
     }
 
-    @SuppressWarnings("deprecation")   // resolveService still works, and its replacement needs Android 14
-    private void resolveNext() {
-        if (resolving || closed || toResolve.isEmpty()) {
+    /**
+     * A service that doesn't answer (say, a phone that just left the network)
+     * would hold up the rest of the queue: skip it after a while. Before
+     * Android 14 a resolve can't be cancelled, and the NsdManager can't start
+     * another until it ends, so the rest go through a new NsdManager.
+     */
+    private void giveUpOnSlowResolve() {
+        if (resolving == null || SystemClock.elapsedRealtime() - resolveStarted < RESOLVE_TIMEOUT_MS) {
             return;
         }
-        resolving = true;
-        nsd.resolveService(toResolve.poll(), new NsdManager.ResolveListener() {
+        Log.w(TAG, "an mDNS lookup is taking too long; skipping it");
+        NsdManager.ResolveListener slow = resolving;
+        resolving = null;
+        if (Build.VERSION.SDK_INT >= 34) {
+            try {
+                resolver.stopServiceResolution(slow);
+            } catch (IllegalArgumentException ignored) {
+            }
+        } else {
+            resolver = context.createConfigurationContext(context.getResources().getConfiguration())
+                    .getSystemService(NsdManager.class);
+        }
+        resolveNext();
+    }
+
+    @SuppressWarnings("deprecation")   // resolveService still works, and its replacement needs Android 14
+    private void resolveNext() {
+        if (resolving != null || closed || toResolve.isEmpty()) {
+            return;
+        }
+        NsdManager.ResolveListener listener = new NsdManager.ResolveListener() {
             @Override
             public void onResolveFailed(NsdServiceInfo info, int errorCode) {
-                Log.w(TAG, "couldn't resolve " + info.getServiceName() + ": " + errorCode);
-                done();
+                Log.w(TAG, "couldn't look up " + info.getServiceName() + ": " + errorCode);
+                done(this);
             }
 
             @Override
             public void onServiceResolved(NsdServiceInfo info) {
                 InetAddress host = info.getHost();
                 if (host != null && isLocal(host)) {
-                    Log.i(TAG, "wireless debugging is on port " + info.getPort());
-                    ports.add(info.getPort());
+                    Log.i(TAG, "wireless debugging: " + info.getServiceName() + " on port " + info.getPort());
+                    found.add(new Found(info.getServiceName(), info.getPort()));
                 }
-                done();
+                done(this);
             }
 
-            private void done() {
+            private void done(NsdManager.ResolveListener self) {
                 synchronized (PortFinder.this) {
-                    resolving = false;
-                    resolveNext();
+                    if (resolving == self) {   // not one given up on
+                        resolving = null;
+                        resolveNext();
+                    }
                 }
             }
-        });
+        };
+        resolving = listener;
+        resolveStarted = SystemClock.elapsedRealtime();
+        try {
+            resolver.resolveService(toResolve.poll(), listener);
+        } catch (IllegalArgumentException e) {
+            Log.w(TAG, "couldn't start an mDNS lookup", e);
+            resolving = null;
+        }
     }
 
     /** Whether the address is one of this device's own. */

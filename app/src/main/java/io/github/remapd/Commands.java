@@ -33,19 +33,30 @@ final class Commands {
 
     /**
      * Run once, over the connection the TV allowed during setup. Lets the app
-     * switch wireless debugging on and off (prints @@granted if that worked),
-     * stops adb forgetting the app's key after 7 days without a connection,
-     * and keeps Android from delaying or pausing the app because it's rarely
-     * opened, so it still starts remapd after a restart.
+     * switch wireless debugging on and off; stops adb forgetting the app's key
+     * 7 days after setup (signing in over wireless debugging doesn't count as
+     * using it); and keeps Android from delaying or pausing the app because
+     * it's rarely opened, so it still starts remapd after a restart. Each step
+     * prints a marker when it worked (see {@link #ran}).
      */
     static String setup(String pkg) {
         if (!pkg.matches("[A-Za-z0-9_.]+")) {
             throw new IllegalArgumentException("odd package name: " + pkg);
         }
         return "pm grant " + pkg + " android.permission.WRITE_SECURE_SETTINGS && echo @@granted; "
-                + "settings put global adb_allowed_connection_time 0; "
-                + "cmd deviceidle whitelist +" + pkg + " >/dev/null; "
-                + "appops set " + pkg + " AUTO_REVOKE_PERMISSIONS_IF_UNUSED ignore; true";
+                + "settings put global adb_allowed_connection_time 0 && echo @@timeout; "
+                + "cmd deviceidle whitelist +" + pkg + " >/dev/null && echo @@deviceidle; "
+                + "appops set " + pkg + " AUTO_REVOKE_PERMISSIONS_IF_UNUSED ignore && echo @@appops; true";
+    }
+
+    /** Whether a step of {@link #setup} printed its marker. */
+    static boolean ran(String output, String step) {
+        for (String line : output.split("\n")) {
+            if (line.trim().equals("@@" + step)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** STATUS output, split up. */

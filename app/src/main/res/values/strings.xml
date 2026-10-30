@@ -3,7 +3,7 @@
     <string name="app_name">remapd</string>
     <string name="subtitle">Keeps your remote\'s extra buttons working. remapd starts by itself after a restart, and whenever you open this app.</string>
 
-    <string name="setup_steps">One-time setup, with a computer:\n1. Copy remapd and remapd.conf to /data/local/tmp with adb (see the README).\n2. On the computer, run:  adb tcpip 5555\n3. Select Set up. When the TV asks \"Allow USB debugging?\", tick \"Always allow from this computer\" and select Allow.\n\nThe app then lets itself switch wireless debugging on and off, turns off adb\'s 7-day authorization timeout so its key keeps working, exempts itself from battery restrictions, closes port 5555 and starts remapd.</string>
+    <string name="setup_steps">One-time setup, with a computer:\n1. Copy remapd and remapd.conf to /data/local/tmp with adb (see the README).\n2. On the computer, run:  adb tcpip 5555\n3. Select Set up. When the TV asks \"Allow USB debugging?\", tick \"Always allow from this computer\" and select Allow.\n\nThe app then lets itself switch wireless debugging on and off, turns off adb\'s 7-day authorization timeout (for every key) so its key keeps working, exempts itself from battery restrictions, closes port 5555 and starts remapd. Finally it turns wireless debugging off: it switches it on by itself when it needs it.</string>
 
     <string name="start_ready">Starts after a restart: yes.</string>
     <string name="start_not_set_up">Starts after a restart: not set up yet.</string>
@@ -29,12 +29,17 @@
     <string name="step_wireless_on">Turning on wireless debugging…</string>
     <string name="step_finding">Finding wireless debugging…</string>
     <string name="step_allow_network">On the TV, allow wireless debugging on this network (tick Always allow).</string>
+    <string name="note_port_open">Port 5555 may still be open. Run adb usb on your computer to close it (it also closes at the next restart).</string>
+    <string name="note_wireless_off">Wireless debugging is off now. The app switches it on by itself when it needs it; turn it back on in Developer options when you want to use adb from your computer.</string>
+    <string name="warn_timeout">Couldn\'t turn off adb\'s authorization timeout, so the TV will forget the app\'s key 7 days after setup. Turn on \"Disable adb authorization timeout\" in Developer options.</string>
+    <string name="warn_battery">Couldn\'t exempt the app from all of Android\'s background limits, so starting remapd after a restart may be delayed.</string>
     <string name="step_connecting">Connecting…</string>
     <string name="step_running">Running…</string>
 
     <string name="reason_opened">app opened</string>
     <string name="reason_boot">restart</string>
     <string name="reason_setup">setup</string>
+    <string name="reason_follow_up">wireless debugging left on</string>
     <string name="already_running">remapd is already running.</string>
     <string name="started">remapd started.</string>
     <string name="last_none">remapd hasn\'t been started from here yet.</string>
@@ -43,11 +48,12 @@
     <string name="error_not_set_up">Not set up yet. Select Set up.</string>
     <string name="error_usb_off">USB debugging is off. Turn it on in Developer options; remapd stops without it.</string>
     <string name="error_no_wifi">The TV isn\'t on Wi-Fi, and wireless debugging only works over Wi-Fi.</string>
-    <string name="error_network">Wireless debugging wasn\'t allowed on this Wi-Fi network. Allow it when the TV asks (tick Always allow), then try again.</string>
+    <string name="error_network">Wireless debugging wasn\'t allowed on this Wi-Fi access point yet (a dual-band or mesh router has several). Allow it when the TV asks, ticking Always allow; the app then starts remapd by itself.</string>
     <string name="error_not_found">Couldn\'t find wireless debugging on the network.</string>
     <string name="error_key_rejected">The TV no longer accepts this app\'s key (maybe USB debugging authorizations were revoked). Run adb tcpip 5555 on your computer and select Set up again.</string>
     <string name="error_no_setup_port">Nothing answered on port 5555. Run adb tcpip 5555 on your computer first, then select Set up.</string>
     <string name="error_not_allowed">The TV didn\'t allow the connection. Select Set up again, then allow it (tick Always allow).</string>
+    <string name="error_allowed_once">The TV allowed the connection just this once, so it didn\'t save the app\'s key. Run adb tcpip 5555 on your computer again, select Set up again, and tick \"Always allow from this computer\".</string>
     <string name="error_grant">Couldn\'t give the app the permission it needs: %1$s</string>
     <string name="error_key">Couldn\'t read the app\'s key (%1$s). Select Set up again.</string>
     <string name="error_failed">Failed: %1$s</string>

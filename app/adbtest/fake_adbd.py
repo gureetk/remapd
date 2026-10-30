@@ -9,6 +9,11 @@ to sign, then the public key and a prompt. TLS mode is like the wireless
 debugging port: STLS, then a TLS handshake that only accepts known keys.
 
     fake_adbd.py --keys FILE [--tls] [--prompt always|once|ignore] --log FILE
+                 [--drop-after-tls] [--no-auth]
+
+--drop-after-tls accepts a known key, then drops the connection (like a TV
+switching networks mid-connection); --no-auth answers CNXN straight away,
+like an adbd that doesn't check keys (or something that isn't adbd).
 
 Prints the port it listens on (127.0.0.1), then serves connections until it's
 killed. Everything it sees goes to --log as JSON lines for the test to check.
@@ -143,6 +148,7 @@ class Session:
         self.args = args
         self.log = log
         self.next_id = 100
+        self.pending = []   # packets that arrived while a stream was waiting for OKAY
 
     def run(self):
         cmd, version, maxdata, payload = self.t.recv()
@@ -151,7 +157,9 @@ class Session:
             return
         self.log("cnxn", version=version, maxdata=maxdata,
                  banner=payload.decode("latin-1"))
-        if self.args.tls:
+        if self.args.no_auth:
+            self.t.send(A_CNXN, A_VERSION, MAX_PAYLOAD, self.device_banner())
+        elif self.args.tls:
             self.tls_sign_in()
         else:
             self.plain_sign_in()
@@ -209,6 +217,8 @@ class Session:
             self.log("tls_failed", message=str(e))
             raise EOFError
         self.log("tls_ok", version=conn.get_protocol_version_name())
+        if self.args.drop_after_tls:
+            raise EOFError
         self.t.conn = conn
         self.t.send(A_CNXN, A_VERSION, MAX_PAYLOAD, self.device_banner())
 
@@ -261,7 +271,7 @@ class Session:
 
     def serve(self):
         while True:
-            cmd, arg0, arg1, payload = self.t.recv()
+            cmd, arg0, arg1, payload = self.pending.pop(0) if self.pending else self.t.recv()
             if cmd == A_OPEN:
                 self.open(arg0, payload.rstrip(b"\0").decode("utf-8"))
             elif cmd == A_CLSE:
@@ -285,7 +295,8 @@ class Session:
             self.t.send(A_OKAY, local, remote)
             for i in range(0, len(output), CHUNK):
                 self.t.send(A_WRTE, local, remote, output[i:i + CHUNK])
-                self.wait_okay(local, remote)
+                if not self.wait_okay(local, remote):
+                    return   # the client closed the stream
             self.t.send(A_CLSE, local, remote)
         elif service == "usb:":
             # adbd answers, then restarts, which drops the connection.
@@ -297,13 +308,20 @@ class Session:
             self.t.send(A_CLSE, 0, remote)   # failed OPEN
 
     def wait_okay(self, local, remote):
+        """Waits for the client's OKAY for one WRTE, like adbd. False if it closed the stream."""
         while True:
-            cmd, arg0, arg1, _ = self.t.recv()
+            packet = self.t.recv()
+            cmd, arg0, arg1, _ = packet
             if cmd == A_OKAY and arg1 == local:
                 if arg0 != remote:
                     self.log("error", message="OKAY from the wrong stream")
-                return
-            self.log("error", message="expected OKAY, got %08x" % cmd)
+                return True
+            if cmd == A_CLSE and arg1 == local:
+                self.log("client_closed_stream", local=arg0)
+                return False
+            if cmd == A_OKAY:
+                continue   # for a stream that's already closed
+            self.pending.append(packet)   # e.g. the next OPEN; handled after this stream
 
 
 def handle(sock, args, log):
@@ -326,6 +344,8 @@ def main():
     p.add_argument("--tls", action="store_true")
     p.add_argument("--prompt", choices=["always", "once", "ignore"], default="ignore")
     p.add_argument("--log", required=True)
+    p.add_argument("--drop-after-tls", action="store_true")
+    p.add_argument("--no-auth", action="store_true")
     args = p.parse_args()
     log = Log(args.log)
     server = socket.socket()

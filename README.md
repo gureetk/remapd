@@ -145,9 +145,13 @@ With remapd and your config already in `/data/local/tmp` (steps 1 to 3 above):
 The app then:
 
 - gives itself permission to switch wireless debugging on and off (`WRITE_SECURE_SETTINGS`);
-- turns off adb's 7-day authorization timeout, like the "Disable adb authorization timeout" developer option. Otherwise the TV would forget the app's key after a week without a restart;
+- turns off adb's 7-day authorization timeout, like the "Disable adb authorization timeout" developer option. Otherwise the TV would forget the app's key 7 days after setup, since signing in over wireless debugging doesn't count as using it. The setting is for every key the TV has allowed, your computer's too;
 - exempts itself from battery restrictions and from being paused when unused, so Android doesn't hold it back after a restart;
-- closes port 5555 again, like `adb usb`, and starts remapd the same way it will after a restart.
+- checks the TV saved its key ("Always allow"), closes port 5555 again (like `adb usb`) and checks it's closed;
+- starts remapd the same way it will after a restart;
+- turns wireless debugging off. The app switches it on by itself when it needs it; turn it on again in Developer options when you want to use adb from your computer.
+
+The app shows what each step did, and says so if one didn't work.
 
 ### After each restart
 
@@ -164,7 +168,9 @@ sequenceDiagram
     App->>TV: turn wireless debugging back off
 ```
 
-remapd keeps running after that: adb only stops when USB debugging is off too. It all takes a few seconds. Opening the app does the same, and the app shows whether remapd is running, starts, stops and checks it, and shows the end of its log.
+remapd keeps running after that: adb only stops when USB debugging is off too. It all takes a few seconds. If remapd didn't start after the last restart, opening the app tries again. The app also shows whether remapd is running, starts, stops and checks it, and shows the end of its log.
+
+Wireless debugging is only on for those few seconds. If the app is stopped halfway, a job switches it off a few minutes later. Android only allows wireless debugging on Wi-Fi access points someone has allowed it on, and asks otherwise ("Allow wireless debugging on this network?"); a dual-band or mesh router has several access points. If nobody answers in time, the app waits for the answer and finishes the job once it's allowed.
 
 ### How the app signs in to adb
 
@@ -172,10 +178,10 @@ The app has its own adb key, like `~/.android/adbkey` on a computer. During setu
 
 - The key stays on the TV: it's in the app's private storage, encrypted with a key kept in Android's keystore.
 - The app only connects to the TV itself (127.0.0.1), runs only the setup steps above and remapd's start, stop and status commands, and offers nothing to other apps.
-- To take its access away, revoke USB debugging authorizations in Developer options (that also removes your computer's), or uninstall the app, which deletes its key.
+- To take its access away, revoke USB debugging authorizations in Developer options (that also removes your computer's), or uninstall the app. Uninstalling deletes the app's key; the TV's list keeps the public half until you revoke authorizations, but that's useless without the private half. The authorization timeout stays off until you turn "Disable adb authorization timeout" off again.
 - The adb client is small and written for this app ([`app/src/main/java/io/github/remapd/adb`](app/src/main/java/io/github/remapd/adb)). It's tested against a fake adbd that does TLS with OpenSSL ([`app/adbtest`](app/adbtest)).
 
-If `adb install` complains about the signature (an older build is installed, signed with a different key), uninstall that first with `adb uninstall io.github.remapd`.
+Builds from GitHub Actions are each signed with a different throwaway key, so installing a newer one means uninstalling the old one first (`adb uninstall io.github.remapd`) and doing the setup again. To update in place, [build it](#building-and-testing) and sign it with your own key.
 
 ## Config reference
 
@@ -204,7 +210,7 @@ One line per button. Codes are the `MSC_SCAN` values from `getevent`, and `#` st
 
 - Buttons that send nothing over Bluetooth (some remotes have IR-only buttons), or that send the same code, can't be told apart.
 - Keys the system keeps for itself ("global keys", like `GUIDE` on some devices) never reach apps. `check` and `run` point these out.
-- remapd alone doesn't survive a restart. The [companion app](#start-it-automatically-after-a-restart) handles that, but only over Wi-Fi: Android won't turn on wireless debugging on Ethernet. The first time the TV is on a new Wi-Fi network after a restart, it asks whether to allow wireless debugging there; tick **Always allow**.
+- remapd alone doesn't survive a restart. The [companion app](#start-it-automatically-after-a-restart) handles that, but only when the TV is on Wi-Fi: Android doesn't allow wireless debugging over Ethernet. The first time the TV uses a Wi-Fi access point, it asks whether to allow wireless debugging there; tick **Always allow**.
 - It has been tested on one device and one remote so far. Reports from other setups are welcome.
 
 ## Building and testing

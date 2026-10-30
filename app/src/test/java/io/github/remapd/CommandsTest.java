@@ -61,8 +61,18 @@ public class CommandsTest {
     public void setup() {
         String s = Commands.setup("io.github.remapd");
         assertTrue(s.startsWith("pm grant io.github.remapd android.permission.WRITE_SECURE_SETTINGS && echo @@granted;"));
-        assertTrue(s.contains("settings put global adb_allowed_connection_time 0;"));
         assertTrue(s.contains("cmd deviceidle whitelist +io.github.remapd "));
+        assertTrue(s.contains("settings put global adb_allowed_connection_time 0 && echo @@timeout;"));
+    }
+
+    @Test
+    public void setupMarkers() {
+        String out = "@@granted\nException occurred while executing 'whitelist':\n@@appops\n";
+        assertTrue(Commands.ran(out, "granted"));
+        assertTrue(Commands.ran(out, "appops"));
+        assertFalse(Commands.ran(out, "timeout"));
+        assertFalse(Commands.ran(out, "deviceidle"));
+        assertFalse(Commands.ran("echo @@granted", "granted"));   // only whole lines count
     }
 
     @Test(expected = IllegalArgumentException.class)

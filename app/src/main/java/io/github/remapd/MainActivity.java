@@ -21,8 +21,10 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(buildLayout());
         Starter.addListener(onChange);
-        // Opening the app starts remapd if it isn't running, e.g. if starting it after a restart failed.
-        if (savedInstanceState == null && Starter.isSetUp(this) && !Starter.virtualRemotePresent(this)) {
+        // Opening the app starts remapd if starting it after the last restart didn't work.
+        // (Not every time: other apps can open this screen too.)
+        if (savedInstanceState == null && Starter.isSetUp(this) && !Starter.virtualRemotePresent(this)
+                && !Starter.startedThisBoot(this)) {
             outputView.setText(R.string.working);
             Starter.ensureRunning(this, getString(R.string.reason_opened), this::progress, this::showResult);
         }

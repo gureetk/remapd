@@ -9,14 +9,21 @@ import android.hardware.input.InputManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.provider.Settings;
 import android.text.format.DateFormat;
 import android.util.Log;
 import android.view.InputDevice;
 
 import java.io.IOException;
 import java.net.ConnectException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.security.GeneralSecurityException;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
@@ -82,6 +89,8 @@ final class Starter {
     private static final int COMMAND_TIMEOUT_MS = 30_000;
     private static final long FIND_TIMEOUT_MS = 30_000;
     private static final long NETWORK_APPROVAL_TIMEOUT_MS = 120_000;
+    private static final long AFTER_REJECTION_MS = 5_000;
+    private static final String ADBD_SERVICE = "adbd_service";
 
     private static final ExecutorService worker = Executors.newSingleThreadExecutor();
     private static final Handler main = new Handler(Looper.getMainLooper());
@@ -122,6 +131,11 @@ final class Starter {
         return false;
     }
 
+    /** Whether remapd was started successfully since the TV last restarted. */
+    static boolean startedThisBoot(Context c) {
+        return prefs(c).getInt("ok_boot", -1) == bootCount(c);
+    }
+
     // ---- running things in the background -------------------------------
 
     /** Starts remapd unless it's already running. The callback runs on the main thread. */
@@ -138,6 +152,12 @@ final class Starter {
     static void setUp(Context context, Progress progress, Callback callback) {
         Context app = context.getApplicationContext();
         submit(() -> setUpBlocking(app, progress), callback);
+    }
+
+    /** Deals with wireless debugging the app left on (see WirelessDebugging). */
+    static void followUp(Context context, Callback callback) {
+        Context app = context.getApplicationContext();
+        submit(() -> followUpBlocking(app), callback);
     }
 
     /** Call on the main thread. */
@@ -194,25 +214,27 @@ final class Starter {
             return new Result(Outcome.NOT_SET_UP, c.getString(R.string.error_not_set_up));
         }
 
-        boolean wasOn = WirelessDebugging.isOn(cr);
-        if (!wasOn && !WirelessDebugging.onWifi(c)) {
+        // Someone else's wireless debugging is left as it is; the app's own is switched off after.
+        boolean usersOwn = WirelessDebugging.onByUser(c);
+        if (!usersOwn && !WirelessDebugging.isOn(cr) && !WirelessDebugging.onWifi(c)) {
             return new Result(Outcome.NO_WIFI, c.getString(R.string.error_no_wifi));
         }
+        boolean awaitingApproval = false;
         try {
-            if (!wasOn) {
-                p.step(c.getString(R.string.step_wireless_on));
-                WirelessDebugging.set(cr, true);
+            if (!usersOwn) {
+                if (!WirelessDebugging.isOn(cr)) {
+                    p.step(c.getString(R.string.step_wireless_on));
+                }
+                WirelessDebugging.turnOnForApp(c);
             }
             p.step(c.getString(R.string.step_finding));
-            int port = findPort(c, cr, p);
-            p.step(c.getString(R.string.step_connecting));
-            try (AdbConnection adb = AdbConnection.open("127.0.0.1", port, id, AdbConnection.Mode.TLS,
-                    null, 0, null)) {
+            try (AdbConnection adb = findAndConnect(c, cr, id, p)) {
                 p.step(c.getString(R.string.step_running));
                 String out = adb.run(Commands.service(command), COMMAND_TIMEOUT_MS, false);
                 return new Result(Outcome.OK, out.trim());
             }
         } catch (Failure f) {
+            awaitingApproval = f.result.outcome == Outcome.NETWORK_NOT_ALLOWED;
             return f.result;
         } catch (AdbAuthException e) {
             Log.w(TAG, "adbd rejected the key", e);
@@ -227,26 +249,52 @@ final class Starter {
             Thread.currentThread().interrupt();
             return new Result(Outcome.FAILED, c.getString(R.string.error_failed, "interrupted"));
         } finally {
-            if (!wasOn) {
+            if (!usersOwn) {
                 try {
-                    WirelessDebugging.set(cr, false);
+                    if (awaitingApproval) {
+                        WirelessDebugging.awaitApproval(c);
+                    } else {
+                        WirelessDebugging.turnOffForApp(c);
+                    }
                 } catch (SecurityException ignored) {
                 }
             }
         }
     }
 
-    /** Waits for wireless debugging to come up and show itself on the network. */
-    private static int findPort(Context c, ContentResolver cr, Progress p)
-            throws InterruptedException, Failure {
+    /**
+     * Waits for wireless debugging to come up and announce itself, and
+     * connects to it. Tries every announcement on this TV, as an old one may
+     * linger and another app could announce itself too.
+     */
+    private static AdbConnection findAndConnect(Context c, ContentResolver cr, AdbIdentity id, Progress p)
+            throws IOException, InterruptedException, Failure {
         long deadline = SystemClock.elapsedRealtime() + FIND_TIMEOUT_MS;
         boolean asked = false;
-        try (PortFinder finder = new PortFinder(c)) {
+        IOException lastError = null;
+        Set<Integer> tried = new HashSet<>();
+        try (PortFinder finder = new PortFinder(c, prefs(c).getString(ADBD_SERVICE, null))) {
             finder.start();
             while (true) {
-                int port = finder.await(500);
-                if (port > 0) {
-                    return port;
+                PortFinder.Found found = finder.await(500);
+                if (found != null && tried.add(found.port)) {
+                    p.step(c.getString(R.string.step_connecting));
+                    try {
+                        AdbConnection adb = AdbConnection.open("127.0.0.1", found.port, id,
+                                AdbConnection.Mode.TLS, null, 0, null);
+                        prefs(c).edit().putString(ADBD_SERVICE, found.name).apply();
+                        return adb;
+                    } catch (ConnectException e) {
+                        Log.i(TAG, "nothing listens on port " + found.port + " (an old announcement?)");
+                        lastError = e;
+                    } catch (AdbAuthException e) {
+                        // Almost always adbd not knowing the key, but it could be
+                        // something else announcing itself: look a little longer.
+                        Log.w(TAG, "port " + found.port + ": " + e.getMessage());
+                        lastError = e;
+                        deadline = Math.min(deadline, SystemClock.elapsedRealtime() + AFTER_REJECTION_MS);
+                    }
+                    continue;
                 }
                 if (finder.failed()) {
                     throw new Failure(Outcome.NOT_FOUND, c.getString(R.string.error_not_found));
@@ -258,12 +306,15 @@ final class Starter {
                 }
                 if (!on && !asked) {
                     // Android switched it back off: the TV is asking whether to
-                    // allow wireless debugging on this network. Wait for an answer.
+                    // allow wireless debugging on this access point. Wait for an answer.
                     asked = true;
                     p.step(c.getString(R.string.step_allow_network));
                     deadline = now + NETWORK_APPROVAL_TIMEOUT_MS;
                 }
                 if (now > deadline) {
+                    if (lastError != null) {
+                        throw lastError;
+                    }
                     throw on ? new Failure(Outcome.NOT_FOUND, c.getString(R.string.error_not_found))
                             : new Failure(Outcome.NETWORK_NOT_ALLOWED, c.getString(R.string.error_network));
                 }
@@ -278,7 +329,8 @@ final class Starter {
      */
     static Result setUpBlocking(Context c, Progress progress) {
         Progress p = progress != null ? progress : message -> { };
-        if (!WirelessDebugging.usbDebuggingOn(c.getContentResolver())) {
+        ContentResolver cr = c.getContentResolver();
+        if (!WirelessDebugging.usbDebuggingOn(cr)) {
             return new Result(Outcome.USB_DEBUGGING_OFF, c.getString(R.string.error_usb_off));
         }
         AdbIdentity id = null;
@@ -297,33 +349,55 @@ final class Starter {
             return new Result(Outcome.FAILED, c.getString(R.string.error_failed, e.getMessage()));
         }
 
+        AdbIdentity key = id;
         String fingerprint = id.fingerprint();
+        List<String> notes = new ArrayList<>();
+        String out;
+        boolean saved;
+        boolean signedIn = false;
         p.step(c.getString(R.string.step_connect_setup));
-        try (AdbConnection adb = AdbConnection.open("127.0.0.1", SETUP_PORT, id,
+        try (AdbConnection adb = AdbConnection.open("127.0.0.1", SETUP_PORT, key,
                 AdbConnection.Mode.ALLOW_PROMPT,
                 () -> p.step(c.getString(R.string.step_allow_prompt, fingerprint)),
                 PROMPT_TIMEOUT_MS, null)) {
-            p.step(c.getString(R.string.step_permissions));
-            String out = adb.run(Commands.service(Commands.setup(c.getPackageName())), COMMAND_TIMEOUT_MS, false);
-            Log.i(TAG, "setup: " + out.trim());
-            if (!out.contains("@@granted")) {
-                return new Result(Outcome.FAILED, c.getString(R.string.error_grant, out.trim()));
-            }
-            p.step(c.getString(R.string.step_close_setup));
+            signedIn = true;
             try {
-                adb.run("usb:", 10_000, true);   // adbd restarts without the TCP port
-            } catch (IOException e) {
-                Log.w(TAG, "couldn't close port 5555", e);
+                p.step(c.getString(R.string.step_permissions));
+                out = adb.run(Commands.service(Commands.setup(c.getPackageName())), COMMAND_TIMEOUT_MS, false);
+                Log.i(TAG, "setup: " + out.trim());
+                saved = keyIsSaved(key);
+            } finally {
+                p.step(c.getString(R.string.step_close_setup));
+                if (!closeSetupPort(adb, key)) {
+                    notes.add(c.getString(R.string.note_port_open));
+                }
             }
         } catch (ConnectException e) {
             return new Result(Outcome.NO_SETUP_PORT, c.getString(R.string.error_no_setup_port));
         } catch (AdbAuthException e) {
             Log.w(TAG, "setup wasn't allowed", e);
             return new Result(e.reason == AdbAuthException.Reason.NOT_ALLOWED ? Outcome.NOT_ALLOWED
-                    : Outcome.KEY_REJECTED, c.getString(R.string.error_not_allowed));
+                    : Outcome.KEY_REJECTED,
+                    join(c.getString(R.string.error_not_allowed), c.getString(R.string.note_port_open)));
         } catch (IOException e) {
             Log.w(TAG, "setup failed", e);
-            return new Result(Outcome.FAILED, c.getString(R.string.error_failed, e.getMessage()));
+            if (!signedIn) {
+                notes.add(c.getString(R.string.note_port_open));
+            }
+            return new Result(Outcome.FAILED, join(c.getString(R.string.error_failed, e.getMessage()), notes));
+        }
+
+        if (!Commands.ran(out, "granted")) {
+            return new Result(Outcome.FAILED, join(c.getString(R.string.error_grant, out.trim()), notes));
+        }
+        if (!saved) {
+            return new Result(Outcome.NOT_ALLOWED, join(c.getString(R.string.error_allowed_once), notes));
+        }
+        if (!Commands.ran(out, "timeout")) {
+            notes.add(c.getString(R.string.warn_timeout));
+        }
+        if (!Commands.ran(out, "deviceidle") || !Commands.ran(out, "appops")) {
+            notes.add(c.getString(R.string.warn_battery));
         }
 
         // Restarting adbd also stopped remapd if it was running. Start it again the
@@ -332,6 +406,99 @@ final class Starter {
         p.step(c.getString(R.string.step_testing));
         Result r = runBlocking(c, Commands.ENSURE, p);
         remember(c, c.getString(R.string.reason_setup), r);
+        // The app doesn't need wireless debugging left on: it switches it on when it needs it.
+        if (WirelessDebugging.isOn(cr) && !WirelessDebugging.awaitingApproval(c)) {
+            try {
+                WirelessDebugging.switchOff(cr);
+                notes.add(c.getString(R.string.note_wireless_off));
+            } catch (SecurityException e) {
+                Log.w(TAG, "can't switch wireless debugging off", e);
+            }
+        }
+        return new Result(r.outcome, join(r.output, notes));
+    }
+
+    /**
+     * Whether "Always allow" saved the key: a second connection signs in
+     * with the key alone. The TV may take a moment to save it.
+     */
+    private static boolean keyIsSaved(AdbIdentity id) {
+        for (int i = 0; i < 3; i++) {
+            try (AdbConnection again = AdbConnection.open("127.0.0.1", SETUP_PORT, id,
+                    AdbConnection.Mode.SIGNATURE_ONLY, null, 0, null)) {
+                return true;
+            } catch (AdbAuthException e) {
+                SystemClock.sleep(1000);
+            } catch (IOException e) {
+                Log.w(TAG, "couldn't check whether the key was saved", e);
+                return true;   // can't tell; the test run afterwards will
+            }
+        }
+        return false;
+    }
+
+    /** Has adbd stop listening on port 5555 ("usb:"), and checks it did. */
+    private static boolean closeSetupPort(AdbConnection adb, AdbIdentity id) {
+        try {
+            adb.run("usb:", 10_000, true);
+        } catch (IOException e) {
+            Log.w(TAG, "couldn't close port 5555", e);
+        }
+        for (int i = 0; i < 2; i++) {
+            SystemClock.sleep(2000);
+            if (!portOpen(SETUP_PORT)) {
+                return true;
+            }
+            try (AdbConnection again = AdbConnection.open("127.0.0.1", SETUP_PORT, id,
+                    AdbConnection.Mode.SIGNATURE_ONLY, null, 0, null)) {
+                again.run("usb:", 10_000, true);
+            } catch (IOException e) {
+                Log.w(TAG, "couldn't close port 5555", e);
+            }
+        }
+        SystemClock.sleep(2000);
+        return !portOpen(SETUP_PORT);
+    }
+
+    private static boolean portOpen(int port) {
+        try (Socket s = new Socket()) {
+            s.connect(new InetSocketAddress("127.0.0.1", port), 1000);
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Wireless debugging the app left on: a run that was cut short, or the
+     * TV's question about the network answered after the app stopped waiting.
+     * Finishes the job, which switches it off again.
+     */
+    static Result followUpBlocking(Context c) {
+        ContentResolver cr = c.getContentResolver();
+        Result nothing = new Result(Outcome.OK, "");
+        if (!WirelessDebugging.onByApp(c)) {
+            WirelessDebugging.forget(c);
+            return nothing;
+        }
+        if (!WirelessDebugging.isOn(cr)) {
+            if (WirelessDebugging.awaitingApproval(c)) {
+                StartJob.scheduleOnApproval(c);   // keep watching for an answer
+            } else {
+                WirelessDebugging.forget(c);
+            }
+            return nothing;
+        }
+        Result r = virtualRemotePresent(c)
+                ? new Result(Outcome.OK, c.getString(R.string.already_running))
+                : runBlocking(c, Commands.ENSURE, null);
+        if (WirelessDebugging.onByApp(c) && !WirelessDebugging.awaitingApproval(c)) {
+            try {
+                WirelessDebugging.turnOffForApp(c);
+            } catch (SecurityException ignored) {
+            }
+        }
+        remember(c, c.getString(R.string.reason_follow_up), r);
         return r;
     }
 
@@ -345,10 +512,31 @@ final class Starter {
         }
     }
 
+    private static String join(String first, List<String> more) {
+        StringBuilder sb = new StringBuilder(first);
+        for (String s : more) {
+            if (sb.length() > 0) {
+                sb.append("\n\n");
+            }
+            sb.append(s);
+        }
+        return sb.toString();
+    }
+
+    private static String join(String first, String second) {
+        List<String> more = new ArrayList<>();
+        more.add(second);
+        return join(first, more);
+    }
+
     // ---- the last start, for the screen ------------------------------------
 
     private static SharedPreferences prefs(Context c) {
         return c.getSharedPreferences("remapd", Context.MODE_PRIVATE);
+    }
+
+    private static int bootCount(Context c) {
+        return Settings.Global.getInt(c.getContentResolver(), Settings.Global.BOOT_COUNT, 0);
     }
 
     private static void remember(Context c, String reason, Result r) {
@@ -361,11 +549,14 @@ final class Starter {
         } else {
             summary = r.output.split("\n", 2)[0];
         }
-        prefs(c).edit()
+        SharedPreferences.Editor edit = prefs(c).edit()
                 .putLong("last_time", System.currentTimeMillis())
                 .putString("last_reason", reason)
-                .putString("last_result", summary)
-                .apply();
+                .putString("last_result", summary);
+        if (r.ok()) {
+            edit.putInt("ok_boot", bootCount(c));
+        }
+        edit.apply();
     }
 
     static String lastSummary(Context c) {

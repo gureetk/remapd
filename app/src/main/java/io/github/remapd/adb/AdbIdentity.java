@@ -10,6 +10,7 @@ import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
+import java.security.Principal;
 import java.security.PrivateKey;
 import java.security.Signature;
 import java.security.cert.X509Certificate;
@@ -141,6 +142,50 @@ public final class AdbIdentity {
         } catch (GeneralSecurityException e) {
             return "";
         }
+    }
+
+    /**
+     * Whether adbd's list of keys it knows (sent during the TLS handshake as
+     * names "O=AdbKey-0, CN=<SHA-256 of the key, in hex>") includes this key.
+     * Null if there's no such list.
+     */
+    Boolean isListedIn(Principal[] issuers) {
+        if (issuers == null) {
+            return null;
+        }
+        String wanted;
+        try {
+            StringBuilder sb = new StringBuilder();
+            for (byte x : MessageDigest.getInstance("SHA-256").digest(publicKey.getEncoded())) {
+                sb.append(String.format("%02X", x & 0xff));
+            }
+            wanted = sb.toString();
+        } catch (GeneralSecurityException e) {
+            return null;
+        }
+        boolean anyAdbKeys = false;
+        for (Principal issuer : issuers) {
+            if (issuer == null) {
+                continue;
+            }
+            String cn = null;
+            String o = null;
+            for (String part : issuer.getName().split(",")) {
+                String p = part.trim();
+                if (p.startsWith("CN=")) {
+                    cn = p.substring(3);
+                } else if (p.startsWith("O=")) {
+                    o = p.substring(2);
+                }
+            }
+            if ("AdbKey-0".equals(o) && cn != null) {
+                anyAdbKeys = true;
+                if (cn.equalsIgnoreCase(wanted)) {
+                    return true;
+                }
+            }
+        }
+        return anyAdbKeys ? Boolean.FALSE : null;
     }
 
     /** Signs adbd's 20-byte token the way adb does: RSA_sign(NID_sha1, token). */

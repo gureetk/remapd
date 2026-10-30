@@ -29,6 +29,7 @@ import java.security.PrivateKey;
 import java.security.Provider;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
+import java.util.function.Consumer;
 
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
@@ -68,6 +69,8 @@ public final class AdbConnection implements Closeable {
 
     static final int CONNECT_TIMEOUT_MS = 5000;
     static final int READ_TIMEOUT_MS = 15000;
+    /** More output than any of the app's commands print; stops a misbehaving server filling memory. */
+    static final int MAX_OUTPUT = 1024 * 1024;
 
     private final Socket plain;
     private Socket socket;   // the plain socket, or the TLS socket on top of it
@@ -75,6 +78,11 @@ public final class AdbConnection implements Closeable {
     private OutputStream out;
     private int nextLocalId = 1;
     private String banner = "";
+    /**
+     * Whether adbd's TLS handshake listed the app's key among the keys it
+     * knows (adbd sends that list to the client), or null if it sent no list.
+     */
+    private volatile Boolean keyListed;
 
     private AdbConnection(Socket plain) throws IOException {
         this.plain = plain;
@@ -132,8 +140,7 @@ public final class AdbConnection implements Closeable {
                 }
                 // In TLS 1.3, the client's side of the handshake is over before adbd
                 // checks the certificate, so a rejected key shows up here.
-                throw new AdbAuthException(AdbAuthException.Reason.KEY_REJECTED,
-                        "adbd didn't accept the app's key (" + e.getMessage() + ")", e);
+                throw afterTlsFailure(e);
             } catch (SocketTimeoutException e) {
                 if (sentKey) {
                     throw new AdbAuthException(AdbAuthException.Reason.NOT_ALLOWED,
@@ -183,6 +190,11 @@ public final class AdbConnection implements Closeable {
                     break;
 
                 case A_CNXN:
+                    if (mode == Mode.TLS && !tls) {
+                        // Wireless debugging always switches to TLS first; this is something else.
+                        throw new AdbAuthException(AdbAuthException.Reason.REFUSED,
+                                "expected a TLS connection, but the other side didn't ask for one", null);
+                    }
                     socket.setSoTimeout(READ_TIMEOUT_MS);
                     banner = new String(m.payload, StandardCharsets.UTF_8).replace("\0", "");
                     return;
@@ -191,6 +203,25 @@ public final class AdbConnection implements Closeable {
                     throw new IOException("unexpected adb packet while connecting: " + m);
             }
         }
+    }
+
+    private void sawKeyList(Boolean listed) {
+        keyListed = listed;
+    }
+
+    /**
+     * Tells a rejected key from a dropped connection, using the list of known
+     * keys adbd sent during the handshake: a key on that list is accepted, so
+     * the connection must have dropped (worth trying again later).
+     */
+    private IOException afterTlsFailure(IOException e) {
+        Boolean listed = keyListed;
+        if (Boolean.TRUE.equals(listed)) {
+            return new IOException("the connection to adbd dropped (" + e.getMessage() + ")", e);
+        }
+        return new AdbAuthException(AdbAuthException.Reason.KEY_REJECTED, listed == null
+                ? "adbd ended the connection; it doesn't seem to accept the app's key (" + e.getMessage() + ")"
+                : "adbd doesn't know the app's key (" + e.getMessage() + ")", e);
     }
 
     private static byte[] sign(AdbIdentity id, byte[] token) throws IOException {
@@ -206,7 +237,7 @@ public final class AdbConnection implements Closeable {
         try {
             SSLContext context = provider == null
                     ? SSLContext.getInstance("TLS") : SSLContext.getInstance("TLS", provider);
-            context.init(new KeyManager[]{new IdentityKeyManager(id)},
+            context.init(new KeyManager[]{new IdentityKeyManager(id, this::sawKeyList)},
                     new TrustManager[]{new AnyServerTrustManager()}, null);
             ssl = (SSLSocket) context.getSocketFactory().createSocket(plain, host, port, true);
         } catch (GeneralSecurityException e) {
@@ -223,9 +254,7 @@ public final class AdbConnection implements Closeable {
             // adbd ends the handshake when it doesn't know the key; depending on
             // timing, that shows up here (an alert, or the connection dropping
             // while the client is still sending) or on the first read.
-            throw new AdbAuthException(AdbAuthException.Reason.KEY_REJECTED,
-                    "adbd ended the TLS handshake; it doesn't seem to accept the app's key ("
-                            + e.getMessage() + ")", e);
+            throw afterTlsFailure(e);
         }
         socket = ssl;
         in = ssl.getInputStream();
@@ -274,6 +303,11 @@ public final class AdbConnection implements Closeable {
                         if (remoteId == 0) {
                             remoteId = m.arg0;
                         }
+                        if (output.size() + m.payload.length > MAX_OUTPUT) {
+                            send(A_CLSE, localId, remoteId, EMPTY);
+                            throw new IOException(describe(service) + " printed more than "
+                                    + MAX_OUTPUT / 1024 + " KB");
+                        }
                         output.write(m.payload, 0, m.payload.length);
                         send(A_OKAY, localId, m.arg0, EMPTY);   // ready for more
                         break;
@@ -314,22 +348,29 @@ public final class AdbConnection implements Closeable {
         return "adb service \"" + (colon >= 0 ? service.substring(0, colon + 1) : service) + "\"";
     }
 
-    /** Presents the app's key and certificate, whatever adbd asks for. */
+    /**
+     * Presents the app's key and certificate whatever adbd asks for, and notes
+     * whether adbd's list of keys it knows includes this one.
+     */
     private static final class IdentityKeyManager extends X509ExtendedKeyManager {
         private static final String ALIAS = "adb";
         private final AdbIdentity id;
+        private final Consumer<Boolean> keyListed;
 
-        IdentityKeyManager(AdbIdentity id) {
+        IdentityKeyManager(AdbIdentity id, Consumer<Boolean> keyListed) {
             this.id = id;
+            this.keyListed = keyListed;
         }
 
         @Override
         public String chooseClientAlias(String[] keyType, Principal[] issuers, Socket socket) {
+            keyListed.accept(id.isListedIn(issuers));
             return ALIAS;
         }
 
         @Override
         public String chooseEngineClientAlias(String[] keyType, Principal[] issuers, SSLEngine engine) {
+            keyListed.accept(id.isListedIn(issuers));
             return ALIAS;
         }
 

@@ -68,10 +68,10 @@ def java(*args, timeout=60):
 class Fake:
     """fake_adbd.py running in the background."""
 
-    def __init__(self, keys, tls=False, prompt="ignore"):
+    def __init__(self, keys, tls=False, prompt="ignore", extra=()):
         self.log = tempfile.mktemp(suffix=".jsonl")
         cmd = [sys.executable, os.path.join(HERE, "fake_adbd.py"), "--keys", keys,
-               "--prompt", prompt, "--log", self.log] + (["--tls"] if tls else [])
+               "--prompt", prompt, "--log", self.log] + (["--tls"] if tls else []) + list(extra)
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
         self.port = int(self.proc.stdout.readline())
 
@@ -213,6 +213,16 @@ def run(work):
     check(not errors(ev), "no protocol errors " + str(errors(ev)))
     fake.stop()
 
+    fake = Fake(keys)
+    rc, out = connect(fake, me, "SIGNATURE_ONLY", services=["shell:__big__ 2000000", "shell:echo after"])
+    ev = fake.events()
+    o, e = outputs(out)
+    check("more than 1024 KB" in e.get(0, ""), "output is capped at 1 MB")
+    check(any(x["event"] == "client_closed_stream" for x in ev), "...and the client closes that stream")
+    check(o.get(1) == "after\n", "the connection still works afterwards")
+    check(not errors(ev), "no protocol errors " + str(errors(ev)))
+    fake.stop()
+
     open(keys, "w").close()
     fake = Fake(keys, prompt="ignore")
     t0 = time.time()
@@ -233,6 +243,12 @@ def run(work):
     ev = fake.events()
     check(rc == 4 and "AUTH REFUSED" in out, "TLS mode refuses to sign for a plain port")
     check(not any(x["event"] == "signature" for x in ev), "...and sent no signature")
+    fake.stop()
+
+    fake = Fake(keys, extra=["--no-auth"])
+    rc, out = connect(fake, me, "TLS", services=["shell:echo hi"])
+    check(rc == 4 and "AUTH REFUSED" in out and "OUT 0" not in out,
+          "TLS mode refuses a server that skips TLS, and runs nothing")
     fake.stop()
 
     with open(keys, "w") as f:
@@ -262,6 +278,13 @@ def run(work):
     fake = Fake(keys, tls=True)
     rc, out = connect(fake, stranger, "ALLOW_PROMPT")
     check(rc == 2 and "PROMPT" not in out, "no prompt is possible over TLS: rejected")
+    fake.stop()
+
+    fake = Fake(keys, tls=True, extra=["--drop-after-tls"])
+    rc, out = connect(fake, me, "TLS")
+    check(rc == 5 and "dropped" in out,
+          "known key, connection dropped: a failure to retry, not a rejected key" +
+          ("" if rc == 5 else ": " + out))
     fake.stop()
 
 
