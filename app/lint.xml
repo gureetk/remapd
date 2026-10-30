@@ -2,10 +2,8 @@
 <lint>
     <!-- Android TV banners only come in xhdpi. -->
     <issue id="IconMissingDensityFolder" severity="ignore" />
-    <!-- The app keeps nothing worth backing up; allowBackup="false" covers older versions. -->
+    <!-- Nothing to back up or transfer: the adb key is in no_backup storage (never
+         backed up or moved to a new device) and encrypted with a keystore key
+         that never leaves this one. -->
     <issue id="DataExtractionRules" severity="ignore" />
-    <!-- androidx.annotation stays at 1.3.0, the version Shizuku's API uses (compile-only). -->
-    <issue id="GradleDependency">
-        <ignore path="build.gradle" />
-    </issue>
 </lint>

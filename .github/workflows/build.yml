@@ -38,6 +38,17 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Test and build the app
         run: ./gradlew :app:testReleaseUnitTest :app:assembleRelease
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test the app's adb client against a fake adbd (JDK, then Conscrypt as on Android)
+        run: |
+          pip install pyopenssl==26.4.0 cryptography==50.0.1 adb-shell==0.4.4
+          mkdir -p app/adbtest/build
+          curl -sSfL -o app/adbtest/build/conscrypt.jar \
+            https://repo1.maven.org/maven2/org/conscrypt/conscrypt-openjdk-uber/2.5.2/conscrypt-openjdk-uber-2.5.2.jar
+          echo "eaf537d98e033d0f0451cd1b8cc74e02d7b55ec882da63c88060d806ba89c348  app/adbtest/build/conscrypt.jar" | sha256sum -c -
+          CONSCRYPT_JAR=$PWD/app/adbtest/build/conscrypt.jar python3 app/adbtest/run_tests.py
       - uses: actions/upload-artifact@v4
         with:
           name: remapd-app

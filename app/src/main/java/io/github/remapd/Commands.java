@@ -1,8 +1,8 @@
 package io.github.remapd;
 
 /**
- * The shell commands the app runs through Shizuku, and how it reads their
- * output. Plain Java (no Android classes) so it can be tested on a computer.
+ * The shell commands the app runs over adb, and how it reads their output.
+ * Plain Java (no Android classes) so it can be tested on a computer.
  */
 final class Commands {
     static final String DIR = "/data/local/tmp";
@@ -26,9 +26,26 @@ final class Commands {
                     + "else " + BIN + " status; echo @@$?; fi; "
                     + "echo @@log; tail -n 15 " + LOG + " 2>/dev/null";
 
-    /** Wraps a command so stderr ends up in the output too. */
-    static String[] shell(String command) {
-        return new String[]{"sh", "-c", "exec 2>&1; " + command};
+    /** The adb service that runs a command, with stderr in the output too. */
+    static String service(String command) {
+        return "shell:exec 2>&1; " + command;
+    }
+
+    /**
+     * Run once, over the connection the TV allowed during setup. Lets the app
+     * switch wireless debugging on and off (prints @@granted if that worked),
+     * stops adb forgetting the app's key after 7 days without a connection,
+     * and keeps Android from delaying or pausing the app because it's rarely
+     * opened, so it still starts remapd after a restart.
+     */
+    static String setup(String pkg) {
+        if (!pkg.matches("[A-Za-z0-9_.]+")) {
+            throw new IllegalArgumentException("odd package name: " + pkg);
+        }
+        return "pm grant " + pkg + " android.permission.WRITE_SECURE_SETTINGS && echo @@granted; "
+                + "settings put global adb_allowed_connection_time 0; "
+                + "cmd deviceidle whitelist +" + pkg + " >/dev/null; "
+                + "appops set " + pkg + " AUTO_REVOKE_PERMISSIONS_IF_UNUSED ignore; true";
     }
 
     /** STATUS output, split up. */

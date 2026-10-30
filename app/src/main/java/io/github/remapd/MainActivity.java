@@ -1,8 +1,6 @@
 package io.github.remapd;
 
 import android.app.Activity;
-import android.content.ActivityNotFoundException;
-import android.content.Intent;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.util.TypedValue;
@@ -12,21 +10,21 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-/** Shows whether Shizuku and remapd are running, and lets you start or stop remapd. */
+/** Sets up starting remapd after a restart, shows whether it's running, and starts or stops it. */
 public class MainActivity extends Activity {
-    private TextView shizukuView, remapdView, lastView, outputView, logView;
-    private Button allowButton, openShizukuButton, startButton, stopButton;
+    private TextView setupView, startView, usbView, remapdView, lastView, outputView, logView;
+    private Button setUpButton, startButton, stopButton, checkButton, setUpAgainButton;
     private final Runnable onChange = this::refresh;
-    private boolean busy;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(buildLayout());
         Starter.addListener(onChange);
-        // Opening the app is enough to start remapd, e.g. from a launcher after a restart.
-        if (Starter.hasPermission()) {
-            Starter.ensureRunning(getString(R.string.reason_opened));
+        // Opening the app starts remapd if it isn't running, e.g. if starting it after a restart failed.
+        if (savedInstanceState == null && Starter.isSetUp(this) && !Starter.virtualRemotePresent(this)) {
+            outputView.setText(R.string.working);
+            Starter.ensureRunning(this, getString(R.string.reason_opened), this::progress, this::showResult);
         }
     }
 
@@ -46,90 +44,83 @@ public class MainActivity extends Activity {
         if (isFinishing() || isDestroyed()) {
             return;
         }
-        boolean running = Starter.shizukuRunning();
-        boolean allowed = running && Starter.hasPermission();
-        boolean installed = running || Starter.shizukuInstalled(this);
+        boolean setUp = Starter.isSetUp(this);
+        boolean busy = Starter.busy();
+        boolean usbOn = WirelessDebugging.usbDebuggingOn(getContentResolver());
 
-        if (allowed) {
-            shizukuView.setText(R.string.shizuku_ok);
-        } else if (running && Starter.shizukuTooOld()) {
-            shizukuView.setText(R.string.shizuku_old);
-        } else if (running) {
-            shizukuView.setText(Starter.permissionDeniedForGood() ? R.string.shizuku_denied : R.string.shizuku_ask);
-        } else if (installed) {
-            shizukuView.setText(R.string.shizuku_stopped);
-        } else {
-            shizukuView.setText(R.string.shizuku_missing);
-        }
-        allowButton.setVisibility(running && !allowed && !Starter.shizukuTooOld() ? View.VISIBLE : View.GONE);
-        openShizukuButton.setVisibility(installed && !allowed ? View.VISIBLE : View.GONE);
-        startButton.setEnabled(allowed && !busy);
-        stopButton.setEnabled(allowed && !busy);
+        setupView.setVisibility(setUp ? View.GONE : View.VISIBLE);
+        startView.setText(setUp ? R.string.start_ready : R.string.start_not_set_up);
+        usbView.setVisibility(usbOn ? View.GONE : View.VISIBLE);
+        remapdView.setText(Starter.virtualRemotePresent(this) ? R.string.remapd_running : R.string.remapd_not_seen);
         lastView.setText(Starter.lastSummary(this));
+
+        setUpButton.setVisibility(setUp ? View.GONE : View.VISIBLE);
+        for (Button b : new Button[]{startButton, stopButton, checkButton, setUpAgainButton}) {
+            b.setVisibility(setUp ? View.VISIBLE : View.GONE);
+        }
+        for (Button b : new Button[]{setUpButton, startButton, stopButton, checkButton, setUpAgainButton}) {
+            b.setEnabled(!busy);
+        }
 
         View focused = getCurrentFocus();
         if (focused == null || focused.getVisibility() != View.VISIBLE || !focused.isEnabled()) {
-            if (allowButton.getVisibility() == View.VISIBLE) {
-                allowButton.requestFocus();
-            } else if (openShizukuButton.getVisibility() == View.VISIBLE) {
-                openShizukuButton.requestFocus();
-            } else {
-                startButton.requestFocus();
+            (setUp ? startButton : setUpButton).requestFocus();
+        }
+    }
+
+    private void progress(String message) {
+        runOnUiThread(() -> {
+            if (!isDestroyed()) {
+                outputView.setText(message);
             }
-        }
-
-        if (!allowed) {
-            remapdView.setText(R.string.remapd_unknown);
-            logView.setText("");
-            return;
-        }
-        Starter.run(Commands.STATUS, this::showStatus);
-    }
-
-    private void showStatus(Starter.Result r) {
-        if (isFinishing() || isDestroyed()) {
-            return;
-        }
-        if (r.code == -1) {
-            remapdView.setText(r.output);
-            return;
-        }
-        Commands.Status status = Commands.parseStatus(r.output);
-        switch (status.marker) {
-            case "missing":
-                remapdView.setText(R.string.remapd_missing);
-                break;
-            case "noconf":
-                remapdView.setText(R.string.remapd_noconf);
-                break;
-            default:
-                remapdView.setText(status.text);
-                break;
-        }
-        logView.setText(status.log.isEmpty() ? "" : getString(R.string.recent_log) + "\n" + status.log);
-    }
-
-    private void runAndShow(String command) {
-        busy = true;
-        startButton.setEnabled(false);
-        stopButton.setEnabled(false);
-        outputView.setText(R.string.working);
-        Starter.run(command, r -> {
-            busy = false;
-            outputView.setText(r.output);
-            refresh();
         });
     }
 
-    private void openShizuku() {
-        Intent intent = Starter.shizukuLaunchIntent(this);
-        if (intent == null) {
+    private void showResult(Starter.Result r) {
+        if (isDestroyed()) {
             return;
         }
-        try {
-            startActivity(intent);
-        } catch (ActivityNotFoundException ignored) {
-        }
+        outputView.setText(r.output);
+        logView.setText("");
+    }
+
+    private void setUp() {
+        outputView.setText(R.string.working);
+        logView.setText("");
+        Starter.setUp(this, this::progress, this::showResult);
+    }
+
+    private void run(String command) {
+        outputView.setText(R.string.working);
+        logView.setText("");
+        Starter.run(this, command, this::progress, this::showResult);
+    }
+
+    private void checkStatus() {
+        outputView.setText(R.string.working);
+        logView.setText("");
+        Starter.run(this, Commands.STATUS, this::progress, r -> {
+            if (isDestroyed()) {
+                return;
+            }
+            if (!r.ok()) {
+                outputView.setText(r.output);
+                return;
+            }
+            Commands.Status status = Commands.parseStatus(r.output);
+            switch (status.marker) {
+                case "missing":
+                    outputView.setText(R.string.remapd_missing);
+                    break;
+                case "noconf":
+                    outputView.setText(R.string.remapd_noconf);
+                    break;
+                default:
+                    outputView.setText(status.text);
+                    break;
+            }
+            logView.setText(status.log.isEmpty() ? "" : getString(R.string.recent_log) + "\n" + status.log);
+        });
     }
 
     // ---- layout -------------------------------------------------------------
@@ -150,8 +141,15 @@ public class MainActivity extends Activity {
         subtitle.setAlpha(0.8f);
         root.addView(subtitle, spaced(0, 20));
 
-        shizukuView = text(20);
-        root.addView(shizukuView, spaced(0, 8));
+        setupView = text(18);
+        setupView.setText(R.string.setup_steps);
+        root.addView(setupView, spaced(0, 20));
+
+        startView = text(20);
+        root.addView(startView, spaced(0, 8));
+        usbView = text(20);
+        usbView.setText(R.string.error_usb_off);
+        root.addView(usbView, spaced(0, 8));
         remapdView = text(20);
         root.addView(remapdView, spaced(0, 8));
         lastView = text(16);
@@ -160,12 +158,12 @@ public class MainActivity extends Activity {
 
         LinearLayout buttons = new LinearLayout(this);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
-        allowButton = button(R.string.allow, v -> Starter.requestPermission());
-        openShizukuButton = button(R.string.open_shizuku, v -> openShizuku());
-        startButton = button(R.string.start, v -> runAndShow(Commands.START));
-        stopButton = button(R.string.stop, v -> runAndShow(Commands.STOP));
-        Button refreshButton = button(R.string.refresh, v -> refresh());
-        for (Button b : new Button[]{allowButton, openShizukuButton, startButton, stopButton, refreshButton}) {
+        setUpButton = button(R.string.set_up, v -> setUp());
+        startButton = button(R.string.start, v -> run(Commands.START));
+        stopButton = button(R.string.stop, v -> run(Commands.STOP));
+        checkButton = button(R.string.check, v -> checkStatus());
+        setUpAgainButton = button(R.string.set_up_again, v -> setUp());
+        for (Button b : new Button[]{setUpButton, startButton, stopButton, checkButton, setUpAgainButton}) {
             buttons.addView(b, spaced(dp(12), 0));
         }
         root.addView(buttons, spaced(0, 16));

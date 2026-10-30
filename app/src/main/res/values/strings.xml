@@ -1,36 +1,54 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">remapd</string>
-    <string name="subtitle">Keeps your remote\'s extra buttons working. remapd starts by itself whenever Shizuku starts, including after a restart, and whenever you open this app.</string>
+    <string name="subtitle">Keeps your remote\'s extra buttons working. remapd starts by itself after a restart, and whenever you open this app.</string>
 
-    <string name="shizuku_ok">Shizuku: running, and this app may use it.</string>
-    <string name="shizuku_ask">Shizuku: running. Allow this app to use it:</string>
-    <string name="shizuku_denied">Shizuku: running, but access was denied. Allow remapd in Shizuku\'s list of apps.</string>
-    <string name="shizuku_stopped">Shizuku: not running. Open it and start it, and turn on Start on boot there so it starts by itself after a restart.</string>
-    <string name="shizuku_missing">Shizuku isn\'t installed. Install it first; thedjchi\'s version can start itself after a restart.</string>
-    <string name="shizuku_old">Shizuku: this version is too old. Update Shizuku.</string>
+    <string name="setup_steps">One-time setup, with a computer:\n1. Copy remapd and remapd.conf to /data/local/tmp with adb (see the README).\n2. On the computer, run:  adb tcpip 5555\n3. Select Set up. When the TV asks \"Allow USB debugging?\", tick \"Always allow from this computer\" and select Allow.\n\nThe app then lets itself switch wireless debugging on and off, turns off adb\'s 7-day authorization timeout so its key keeps working, exempts itself from battery restrictions, closes port 5555 and starts remapd.</string>
 
-    <string name="remapd_unknown">remapd: can\'t check without Shizuku.</string>
+    <string name="start_ready">Starts after a restart: yes.</string>
+    <string name="start_not_set_up">Starts after a restart: not set up yet.</string>
+    <string name="remapd_running">remapd: running.</string>
+    <string name="remapd_not_seen">remapd: not detected. Select Check status to make sure.</string>
     <string name="remapd_missing">remapd isn\'t in /data/local/tmp yet. Copy remapd and remapd.conf there with adb first.</string>
     <string name="remapd_noconf">There\'s no /data/local/tmp/remapd.conf yet. Copy your config there with adb first.</string>
 
-    <string name="allow">Allow access</string>
-    <string name="open_shizuku">Open Shizuku</string>
+    <string name="set_up">Set up</string>
+    <string name="set_up_again">Set up again</string>
     <string name="start">Start or restart remapd</string>
     <string name="stop">Stop remapd</string>
-    <string name="refresh">Refresh</string>
+    <string name="check">Check status</string>
     <string name="working">Working…</string>
     <string name="recent_log">Recent log:</string>
 
+    <string name="step_key">Making the app\'s adb key…</string>
+    <string name="step_connect_setup">Connecting to adb on port 5555…</string>
+    <string name="step_allow_prompt">On the TV, tick \"Always allow from this computer\" and select Allow.\nThe key fingerprint it shows should be %1$s</string>
+    <string name="step_permissions">Allowed. Setting up permissions…</string>
+    <string name="step_close_setup">Closing port 5555…</string>
+    <string name="step_testing">Starting remapd the way it will start after a restart…</string>
+    <string name="step_wireless_on">Turning on wireless debugging…</string>
+    <string name="step_finding">Finding wireless debugging…</string>
+    <string name="step_allow_network">On the TV, allow wireless debugging on this network (tick Always allow).</string>
+    <string name="step_connecting">Connecting…</string>
+    <string name="step_running">Running…</string>
+
     <string name="reason_opened">app opened</string>
-    <string name="reason_shizuku">Shizuku connected</string>
-    <string name="reason_allowed">access allowed</string>
     <string name="reason_boot">restart</string>
+    <string name="reason_setup">setup</string>
+    <string name="already_running">remapd is already running.</string>
     <string name="started">remapd started.</string>
     <string name="last_none">remapd hasn\'t been started from here yet.</string>
-    <string name="last_format">Last check: %1$s (%2$s): %3$s</string>
+    <string name="last_format">Last start: %1$s (%2$s): %3$s</string>
 
-    <string name="error_no_access">Shizuku isn\'t running, or this app isn\'t allowed to use it yet.</string>
-    <string name="error_shizuku">Shizuku couldn\'t run the command: %1$s</string>
-    <string name="error_command">The command failed: %1$s</string>
+    <string name="error_not_set_up">Not set up yet. Select Set up.</string>
+    <string name="error_usb_off">USB debugging is off. Turn it on in Developer options; remapd stops without it.</string>
+    <string name="error_no_wifi">The TV isn\'t on Wi-Fi, and wireless debugging only works over Wi-Fi.</string>
+    <string name="error_network">Wireless debugging wasn\'t allowed on this Wi-Fi network. Allow it when the TV asks (tick Always allow), then try again.</string>
+    <string name="error_not_found">Couldn\'t find wireless debugging on the network.</string>
+    <string name="error_key_rejected">The TV no longer accepts this app\'s key (maybe USB debugging authorizations were revoked). Run adb tcpip 5555 on your computer and select Set up again.</string>
+    <string name="error_no_setup_port">Nothing answered on port 5555. Run adb tcpip 5555 on your computer first, then select Set up.</string>
+    <string name="error_not_allowed">The TV didn\'t allow the connection. Select Set up again, then allow it (tick Always allow).</string>
+    <string name="error_grant">Couldn\'t give the app the permission it needs: %1$s</string>
+    <string name="error_key">Couldn\'t read the app\'s key (%1$s). Select Set up again.</string>
+    <string name="error_failed">Failed: %1$s</string>
 </resources>

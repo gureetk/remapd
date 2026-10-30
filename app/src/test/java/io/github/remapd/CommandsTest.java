@@ -1,6 +1,5 @@
 package io.github.remapd;
 
-import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -52,9 +51,22 @@ public class CommandsTest {
 
     @Test
     public void commandsUseTheShell() {
-        assertArrayEquals(new String[]{"sh", "-c", "exec 2>&1; true"}, Commands.shell("true"));
+        assertEquals("shell:exec 2>&1; true", Commands.service("true"));
         assertTrue(Commands.ENSURE.contains(Commands.BIN + " status"));
         assertTrue(Commands.ENSURE.contains(Commands.BIN + " start " + Commands.CONF));
         assertTrue(Commands.STATUS.contains("tail -n 15 " + Commands.LOG));
+    }
+
+    @Test
+    public void setup() {
+        String s = Commands.setup("io.github.remapd");
+        assertTrue(s.startsWith("pm grant io.github.remapd android.permission.WRITE_SECURE_SETTINGS && echo @@granted;"));
+        assertTrue(s.contains("settings put global adb_allowed_connection_time 0;"));
+        assertTrue(s.contains("cmd deviceidle whitelist +io.github.remapd "));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void setupRefusesOddPackageNames() {
+        Commands.setup("a; reboot");
     }
 }
