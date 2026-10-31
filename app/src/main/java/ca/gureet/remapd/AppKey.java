@@ -1,4 +1,4 @@
-package io.github.remapd;
+package ca.gureet.remapd;
 
 import android.content.Context;
 import android.os.Build;
@@ -22,7 +22,7 @@ import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 
-import io.github.remapd.adb.AdbIdentity;
+import ca.gureet.remapd.adb.AdbIdentity;
 
 /**
  * The app's adb key. It's kept in the app's private storage, encrypted with

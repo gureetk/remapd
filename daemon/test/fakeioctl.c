@@ -63,16 +63,23 @@ static int load(unsigned long ino, struct fdev *f)
 
 static void save(unsigned long ino, const struct fdev *f)
 {
-	char path[256];
+	char path[256], tmp[300];
 	FILE *fp;
 	int i;
 
+	/* Written whole, then renamed into place: the tests read these files
+	 * while remapd changes them, and must see the old keymap or the new
+	 * one, never part of one. */
 	snprintf(path, sizeof path, "%s/%lu.dev", fake_dir(), ino);
-	fp = fopen(path, "w");
+	snprintf(tmp, sizeof tmp, "%s.%ld.tmp", path, (long)getpid());
+	fp = fopen(tmp, "w");
+	if (!fp)
+		return;
 	fprintf(fp, "name %s\nid %04x %04x\n", f->name, f->vendor, f->product);
 	for (i = 0; i < f->n; i++)
 		fprintf(fp, "usage %08x %d\n", f->usage[i], f->code[i]);
 	fclose(fp);
+	rename(tmp, path);
 }
 
 static void logf_(const char *file, const char *fmt, ...)

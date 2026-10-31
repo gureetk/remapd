@@ -1,4 +1,4 @@
-package io.github.remapd.adb;
+package ca.gureet.remapd.adb;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;

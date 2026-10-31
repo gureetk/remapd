@@ -1,4 +1,4 @@
-package io.github.remapd.adb;
+package ca.gureet.remapd.adb;
 
 import java.math.BigInteger;
 import java.nio.ByteBuffer;

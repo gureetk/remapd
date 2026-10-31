@@ -1,4 +1,4 @@
-package io.github.remapd;
+package ca.gureet.remapd;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;

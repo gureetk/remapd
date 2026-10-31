@@ -1,0 +1,145 @@
+name: release
+
+# Pushing a tag like v2.1 builds remapd and the app, signs the app with the
+# release key and publishes a GitHub release. See "Making a release" in the
+# README for setting up the key.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  # Builds and tests everything, without the key.
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.versions.outputs.version }}
+      remapd: ${{ steps.versions.outputs.remapd }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag matches the app's version and the changelog
+        id: versions
+        run: |
+          version=$(sed -n "s/^ *versionName '\([^']*\)'.*/\1/p" app/build.gradle)
+          remapd=$(sed -n 's/^#define VERSION *"\([^"]*\)".*/\1/p' daemon/remapd.c)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::The tag is $GITHUB_REF_NAME, but app/build.gradle has versionName '$version'."
+            exit 1
+          fi
+          mkdir -p files
+          awk -v v="$version" '/^## /{ if (found) exit; if ($2 == v) { found = 1; next } } found' CHANGELOG.md \
+            | sed '/[^[:space:]]/,$!d' > files/notes.md
+          if ! grep -q '[^[:space:]]' files/notes.md; then
+            echo "::error::CHANGELOG.md has no '## $version' section."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "remapd=$remapd" >> "$GITHUB_OUTPUT"
+      - name: Test remapd against a fake remote
+        run: python3 daemon/test/run_tests.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build remapd (static ARM binaries)
+        run: |
+          pip install ziglang==0.17.0
+          sh daemon/build.sh
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Test and build the app
+        run: ./gradlew :app:testReleaseUnitTest :app:assembleRelease
+      - name: Gather the files
+        env:
+          REMAPD: ${{ steps.versions.outputs.remapd }}
+        run: |
+          # Signed with a throwaway debug key here; the next job signs it properly.
+          cp app/build/outputs/apk/release/app-release.apk files/app.apk
+          cp daemon/remapd "files/remapd-$REMAPD-arm"
+          cp daemon/remapd-arm64 "files/remapd-$REMAPD-arm64"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4.6.2
+        with:
+          name: release-files
+          path: files/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Signs the app and publishes the release. Only this job can read the key: it
+  # runs in the "release" environment, which waits for approval and only takes
+  # v* tags. It runs none of the repository's code, only the Android SDK's
+  # apksigner, sha256sum and gh, which come with GitHub's runner.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write   # to publish the release
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      REMAPD: ${{ needs.build.outputs.remapd }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093   # v4.3.0
+        with:
+          name: release-files
+          path: files
+      - name: Sign the app with the release key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          CERT_SHA256: ${{ vars.RELEASE_CERT_SHA256 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$CERT_SHA256" ]; then
+            echo "::error::The release environment needs the RELEASE_KEYSTORE_BASE64 and RELEASE_KEYSTORE_PASSWORD secrets and the RELEASE_CERT_SHA256 variable (see the README)."
+            exit 1
+          fi
+          # The fingerprint as keytool shows it (AB:CD:...), maybe with its "SHA256:" label.
+          want=$(printf '%s' "$CERT_SHA256" | sed 's/^[[:space:]]*[Ss][Hh][Aa]-\{0,1\}256:[[:space:]]*//' \
+            | tr -d ': \t\r\n' | tr 'A-F' 'a-f')
+          if ! printf '%s' "$want" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "::error::RELEASE_CERT_SHA256 isn't a SHA-256 fingerprint (64 hex digits, like AB:CD:...)."
+            exit 1
+          fi
+
+          # apksigner from the newest build-tools on the runner (not a preview).
+          apksigner=$(printf '%s\n' "$ANDROID_HOME"/build-tools/*/apksigner \
+            | grep -E '/build-tools/[0-9.]+/apksigner$' | sort -V | tail -n 1)
+          ks="$RUNNER_TEMP/release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$ks"
+          mkdir -p release
+          "$apksigner" sign --ks "$ks" --ks-key-alias remapd --ks-pass env:KEYSTORE_PASSWORD \
+            --v1-signing-enabled false --v2-signing-enabled true --v3-signing-enabled true \
+            --v4-signing-enabled false --out "release/remapd-$VERSION.apk" files/app.apk
+          rm -f "$ks"
+
+          # Signed with that key, and only that key.
+          "$apksigner" verify --print-certs "release/remapd-$VERSION.apk" | tee certs.txt
+          got=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' certs.txt)
+          signers=$(grep -o '^Signer #[0-9]*' certs.txt | sort -u | wc -l)
+          if [ "$got" != "$want" ] || [ "$signers" != 1 ]; then
+            echo "::error::The signed app's certificate ($got) isn't the one RELEASE_CERT_SHA256 names ($want)."
+            exit 1
+          fi
+          echo "CERT=$(printf '%s' "$got" | tr 'a-f' 'A-F' | sed 's/../&:/g; s/:$//')" >> "$GITHUB_ENV"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp "files/remapd-$REMAPD-arm" "files/remapd-$REMAPD-arm64" release/
+          (cd release && sha256sum -- * > SHA256SUMS)
+          {
+            cat files/notes.md
+            echo
+            echo "---"
+            echo
+            echo "**remapd-$VERSION.apk** is the app, with remapd $REMAPD inside. **remapd-$REMAPD-arm** and **remapd-$REMAPD-arm64** are remapd on its own, for setting it up without the app (the 32-bit one runs on 64-bit devices too)."
+            echo
+            echo "The app is signed with the key whose SHA-256 fingerprint is \`$CERT\` (also in the README). To check a download: \`apksigner verify --print-certs remapd-$VERSION.apk\`."
+          } > notes.md
+          pre=""
+          case "$VERSION" in *-*) pre="--prerelease";; esac
+          gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "remapd $VERSION" --notes-file notes.md $pre

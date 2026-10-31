@@ -12,11 +12,11 @@ if (keystorePropsFile.exists()) {
 }
 
 android {
-    namespace 'io.github.remapd'
+    namespace 'ca.gureet.remapd'
     compileSdk 34
 
     defaultConfig {
-        applicationId 'io.github.remapd'
+        applicationId 'ca.gureet.remapd'
         minSdk 30   // Android 11: wireless debugging
         targetSdk 34
         versionCode 3
