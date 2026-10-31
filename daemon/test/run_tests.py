@@ -96,6 +96,15 @@ def unplug_remote(first=6):
         try: os.unlink(sbx(f"/dev/input/event{first + i}"))
         except FileNotFoundError: pass
 
+def wait_for(cond, secs=5.0):
+    """Gives remapd up to secs to get something done; whether cond() came true."""
+    end = time.time() + secs
+    while not cond():
+        if time.time() >= end:
+            return False
+        time.sleep(0.05)
+    return True
+
 def keycode(path, usage):
     ino = os.stat(path).st_ino
     for line in open(f"{FAKE}/{ino}.dev"):
@@ -278,8 +287,9 @@ check(virt_events() == [(398, 1)], "a second down while held isn't sent twice")
 time.sleep(0.1)
 unplug_remote(); time.sleep(0.6)
 check(virt_events() == [(398, 1), (398, 0)], "key released when the remote disconnects")
-remote = make_remote(); time.sleep(1.0)
-check(keycode(remote, 0x0c0069) == 240, "own keys off again after reconnect")
+remote = make_remote()
+check(wait_for(lambda: keycode(remote, 0x0c0069) == 240 and keycode(remote, 0x0c00b2) == 240),
+      "own keys off again after reconnect")
 press(remote, 0x0c00b2); time.sleep(0.4)
 check(virt_events()[-2:] == [(167, 1), (167, 0)], "send works after reconnect (MEDIA_RECORD)")
 out = stop_fg(p); print(out)
@@ -376,8 +386,9 @@ check("could not put" not in out, "nothing to undo on exit when nothing was chan
 print("\nG. remote connects after remapd starts")
 reset()
 p = start_fg()
-remote = make_remote(first=9); time.sleep(1.0)
-check(keycode(remote, 0x0c0069) == 240, "picked up the new remote")
+remote = make_remote(first=9)
+check(wait_for(lambda: keycode(remote, 0x0c0069) == 240 and keycode(remote, 0x0c006b) == 240),
+      "picked up the new remote")
 press(remote, 0x0c006b); time.sleep(0.4)
 out = stop_fg(p); print(out)
 check("waiting for the remote to connect" in out, "said it was waiting")
