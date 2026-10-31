@@ -1,4 +1,4 @@
-package io.github.remapd;
+package ca.gureet.remapd;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;

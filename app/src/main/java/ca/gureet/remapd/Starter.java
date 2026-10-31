@@ -1,4 +1,4 @@
-package io.github.remapd;
+package ca.gureet.remapd;
 
 import android.Manifest;
 import android.content.ContentResolver;
@@ -30,9 +30,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import io.github.remapd.adb.AdbAuthException;
-import io.github.remapd.adb.AdbConnection;
-import io.github.remapd.adb.AdbIdentity;
+import ca.gureet.remapd.adb.AdbAuthException;
+import ca.gureet.remapd.adb.AdbConnection;
+import ca.gureet.remapd.adb.AdbIdentity;
 
 /**
  * Starts remapd, and runs the app's other commands, through adb on the TV itself.

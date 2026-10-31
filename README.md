@@ -125,7 +125,7 @@ A newer release installs over the old one (`adb install -r remapd-<version>.apk`
 E3:CA:25:30:F9:3A:91:B0:9C:27:88:9D:52:41:3D:5E:B5:E4:82:34:C4:51:4A:45:C2:BC:D7:42:25:76:FD:7F
 ```
 
-`apksigner verify --print-certs remapd-<version>.apk` (from the Android SDK's build-tools) shows the fingerprint of a download, in lowercase without the colons: `e3ca2530f93a91b09c27889d52413d5eb5e48234c4514a45c2bcd7422576fd7f`. The test builds from GitHub Actions' other runs are each signed with a different throwaway key. Moving between those and a release means uninstalling the app first (`adb uninstall io.github.remapd`) and doing the setup again; `remapd.conf` stays on the TV.
+`apksigner verify --print-certs remapd-<version>.apk` (from the Android SDK's build-tools) shows the fingerprint of a download, in lowercase without the colons: `e3ca2530f93a91b09c27889d52413d5eb5e48234c4514a45c2bcd7422576fd7f`. The test builds from GitHub Actions' other runs are each signed with a different throwaway key. Moving between those and a release means uninstalling the app first (`adb uninstall ca.gureet.remapd`) and doing the setup again; `remapd.conf` stays on the TV.
 
 ## After a restart
 
@@ -155,7 +155,7 @@ The app has its own adb key, like `~/.android/adbkey` on a computer. During setu
 - The key stays on the TV: it's in the app's private storage, encrypted with a key kept in Android's keystore.
 - The app only connects to the TV itself (127.0.0.1), runs only the setup steps above and remapd's own commands (installing it, starting, stopping, checking, learning buttons, and reading and saving `remapd.conf`), and offers nothing to other apps.
 - To take its access away, revoke USB debugging authorizations in Developer options (that also removes your computer's), or uninstall the app. Uninstalling deletes the app's key; the TV's list keeps the public half until you revoke authorizations, but that's useless without the private half. The authorization timeout stays off until you turn "Disable adb authorization timeout" off again.
-- The adb client is small and written for this app ([`app/src/main/java/io/github/remapd/adb`](app/src/main/java/io/github/remapd/adb)). It's tested against a fake adbd that does TLS with OpenSSL ([`app/adbtest`](app/adbtest)).
+- The adb client is small and written for this app ([`app/src/main/java/ca/gureet/remapd/adb`](app/src/main/java/ca/gureet/remapd/adb)). It's tested against a fake adbd that does TLS with OpenSSL ([`app/adbtest`](app/adbtest)).
 
 ## Without the app
 

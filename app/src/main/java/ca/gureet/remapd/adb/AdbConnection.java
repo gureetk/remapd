@@ -1,16 +1,16 @@
-package io.github.remapd.adb;
+package ca.gureet.remapd.adb;
 
-import static io.github.remapd.adb.AdbMessage.A_AUTH;
-import static io.github.remapd.adb.AdbMessage.A_CLSE;
-import static io.github.remapd.adb.AdbMessage.A_CNXN;
-import static io.github.remapd.adb.AdbMessage.A_OKAY;
-import static io.github.remapd.adb.AdbMessage.A_OPEN;
-import static io.github.remapd.adb.AdbMessage.A_STLS;
-import static io.github.remapd.adb.AdbMessage.A_WRTE;
-import static io.github.remapd.adb.AdbMessage.AUTH_RSAPUBLICKEY;
-import static io.github.remapd.adb.AdbMessage.AUTH_SIGNATURE;
-import static io.github.remapd.adb.AdbMessage.AUTH_TOKEN;
-import static io.github.remapd.adb.AdbMessage.EMPTY;
+import static ca.gureet.remapd.adb.AdbMessage.A_AUTH;
+import static ca.gureet.remapd.adb.AdbMessage.A_CLSE;
+import static ca.gureet.remapd.adb.AdbMessage.A_CNXN;
+import static ca.gureet.remapd.adb.AdbMessage.A_OKAY;
+import static ca.gureet.remapd.adb.AdbMessage.A_OPEN;
+import static ca.gureet.remapd.adb.AdbMessage.A_STLS;
+import static ca.gureet.remapd.adb.AdbMessage.A_WRTE;
+import static ca.gureet.remapd.adb.AdbMessage.AUTH_RSAPUBLICKEY;
+import static ca.gureet.remapd.adb.AdbMessage.AUTH_SIGNATURE;
+import static ca.gureet.remapd.adb.AdbMessage.AUTH_TOKEN;
+import static ca.gureet.remapd.adb.AdbMessage.EMPTY;
 
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;

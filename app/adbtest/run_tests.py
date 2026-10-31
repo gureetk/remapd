@@ -1,4 +1,4 @@
-"""Tests the app's adb client (app/src/main/java/io/github/remapd/adb)
+"""Tests the app's adb client (app/src/main/java/ca/gureet/remapd/adb)
 against a fake adbd, on a computer.
 
     python3 app/adbtest/run_tests.py
@@ -32,7 +32,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, utils
 from cryptography.x509.oid import NameOID
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(HERE, "..", "src", "main", "java", "io", "github", "remapd", "adb")
+SRC = os.path.join(HERE, "..", "src", "main", "java", "ca", "gureet", "remapd", "adb")
 BUILD = os.path.join(HERE, "build")
 CLASSES = os.path.join(BUILD, "classes")
 CONSCRYPT = os.environ.get("CONSCRYPT_JAR", "")
@@ -61,7 +61,7 @@ provider = "jdk"   # or "conscrypt": which provider AdbTestMain puts first
 def java(*args, timeout=60):
     cp = CLASSES + (os.pathsep + CONSCRYPT if CONSCRYPT else "")
     flags = ["-Dadbtest.conscrypt=true"] if provider == "conscrypt" else []
-    p = subprocess.run(["java", "-cp", cp] + flags + ["io.github.remapd.adb.AdbTestMain"] + list(args),
+    p = subprocess.run(["java", "-cp", cp] + flags + ["ca.gureet.remapd.adb.AdbTestMain"] + list(args),
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout)
     return p.returncode, p.stdout
 

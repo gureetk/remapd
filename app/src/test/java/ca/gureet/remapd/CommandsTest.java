@@ -1,4 +1,4 @@
-package io.github.remapd;
+package ca.gureet.remapd;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -58,19 +58,19 @@ public class CommandsTest {
     @Test
     public void commandsUseTheShell() {
         assertEquals("shell:exec 2>&1; true", Commands.service("true"));
-        String ensure = Commands.ensure("/data/app/~~x==/io.github.remapd-y==/lib/arm/libremapd.so");
+        String ensure = Commands.ensure("/data/app/~~x==/ca.gureet.remapd-y==/lib/arm/libremapd.so");
         assertTrue(ensure.contains(Commands.BIN + " status"));
         assertTrue(ensure.contains(Commands.BIN + " start " + Commands.CONF));
-        assertTrue(ensure.contains("cmp -s /data/app/~~x==/io.github.remapd-y==/lib/arm/libremapd.so " + Commands.BIN));
+        assertTrue(ensure.contains("cmp -s /data/app/~~x==/ca.gureet.remapd-y==/lib/arm/libremapd.so " + Commands.BIN));
         assertEquals("true", Commands.install("/data/app/it's odd/libremapd.so"));
         assertTrue(Commands.STATUS.contains("tail -n 15 " + Commands.LOG));
     }
 
     @Test
     public void setup() {
-        String s = Commands.setup("io.github.remapd");
-        assertTrue(s.startsWith("pm grant io.github.remapd android.permission.WRITE_SECURE_SETTINGS && echo @@granted;"));
-        assertTrue(s.contains("cmd deviceidle whitelist +io.github.remapd "));
+        String s = Commands.setup("ca.gureet.remapd");
+        assertTrue(s.startsWith("pm grant ca.gureet.remapd android.permission.WRITE_SECURE_SETTINGS && echo @@granted;"));
+        assertTrue(s.contains("cmd deviceidle whitelist +ca.gureet.remapd "));
         assertTrue(s.contains("settings put global adb_allowed_connection_time 0 && echo @@timeout;"));
     }
 

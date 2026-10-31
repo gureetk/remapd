@@ -1,4 +1,4 @@
-package io.github.remapd;
+package ca.gureet.remapd;
 
 import android.app.job.JobInfo;
 import android.app.job.JobParameters;
