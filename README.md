@@ -7,6 +7,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/gureetk/remapd/releases/latest"><img src="https://img.shields.io/github/v/release/gureetk/remapd" alt="latest release"></a>
   <a href="https://github.com/gureetk/remapd/actions/workflows/build.yml"><img src="https://github.com/gureetk/remapd/actions/workflows/build.yml/badge.svg" alt="build"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/root-not%20needed-3ddc84.svg" alt="no root needed">
@@ -81,10 +82,10 @@ adb connect <ip>:<port>          # the address on the Wireless debugging screen
 
 ### 2. Install the app and let it in
 
-Get the app from the latest [build](https://github.com/gureetk/remapd/actions/workflows/build.yml) (the `remapd-app` artifact), then:
+Download `remapd-<version>.apk` from the [latest release](https://github.com/gureetk/remapd/releases/latest), then:
 
 ```sh
-adb install remapd-app.apk
+adb install remapd-2.1.apk
 adb tcpip 5555
 ```
 
@@ -116,6 +117,16 @@ Select a button in the list to change, rename or remove it. Each change goes int
 
 Wireless debugging stays on while the Buttons screen is open. It goes off when you leave the screen, or after about 10 minutes without using it.
 
+### 4. Updating
+
+A newer release installs over the old one (`adb install -r remapd-<version>.apk`) and keeps the setup and your buttons. Every release is signed with the same key, whose SHA-256 fingerprint is:
+
+```
+(to be filled in: the release key's SHA-256 fingerprint)
+```
+
+`apksigner verify --print-certs remapd-<version>.apk` (from the Android SDK's build-tools) shows the fingerprint of a download. The test builds from GitHub Actions' other runs are each signed with a different throwaway key. Moving between those and a release means uninstalling the app first (`adb uninstall io.github.remapd`) and doing the setup again; `remapd.conf` stays on the TV.
+
 ## After a restart
 
 Anything started over ADB stops when the device restarts. The app starts remapd again by itself, through wireless debugging on the TV, with no root and no other apps needed.
@@ -146,8 +157,6 @@ The app has its own adb key, like `~/.android/adbkey` on a computer. During setu
 - To take its access away, revoke USB debugging authorizations in Developer options (that also removes your computer's), or uninstall the app. Uninstalling deletes the app's key; the TV's list keeps the public half until you revoke authorizations, but that's useless without the private half. The authorization timeout stays off until you turn "Disable adb authorization timeout" off again.
 - The adb client is small and written for this app ([`app/src/main/java/io/github/remapd/adb`](app/src/main/java/io/github/remapd/adb)). It's tested against a fake adbd that does TLS with OpenSSL ([`app/adbtest`](app/adbtest)).
 
-Builds from GitHub Actions are each signed with a different throwaway key, so installing a newer one means uninstalling the old one first (`adb uninstall io.github.remapd`) and doing the setup again. To update in place, [build it](#building-and-testing) and sign it with your own key.
-
 ## Without the app
 
 remapd works on its own from `adb shell`; it just won't start again by itself after a restart.
@@ -172,10 +181,11 @@ remapd works on its own from `adb shell`; it just won't start again by itself af
    map    000c0221 KEY_UNKNOWN         # turn the Assistant button off
    ```
 
-3. **Copy remapd over and try it.** Get `remapd` from the latest [build](https://github.com/gureetk/remapd/actions/workflows/build.yml) (the `remapd` artifact), or [build it yourself](#building-and-testing). The 32-bit ARM build runs on 32- and 64-bit ARM devices.
+3. **Copy remapd over and try it.** Download `remapd-<version>-arm` from the [latest release](https://github.com/gureetk/remapd/releases/latest), or [build it yourself](#building-and-testing). This 32-bit ARM build runs on 32- and 64-bit ARM devices.
 
    ```sh
-   adb push remapd remapd.conf /data/local/tmp/
+   adb push remapd-1.3-arm /data/local/tmp/remapd
+   adb push remapd.conf /data/local/tmp/
    adb shell chmod 755 /data/local/tmp/remapd
    adb shell /data/local/tmp/remapd check /data/local/tmp/remapd.conf
    adb shell -t /data/local/tmp/remapd run /data/local/tmp/remapd.conf
@@ -234,6 +244,22 @@ One line per button. Codes are the `MSC_SCAN` values from `getevent`, and `#` st
 | **Tools** | `tools/gen_keynames.py` and `tools/gen_androidkeys.py` regenerate the key name tables; `tools/make_icons.py` redraws the icon, TV banner and README header. |
 
 GitHub Actions runs the tests and builds remapd and the app on every push; the binaries are under each run's artifacts.
+
+### Making a release
+
+1. Raise `versionCode` and `versionName` in `app/build.gradle` (and `VERSION` in `daemon/remapd.c` if remapd changed), and add a `## <versionName>` section to [`CHANGELOG.md`](CHANGELOG.md). Its text becomes the release notes.
+2. Merge that to `main`, then tag it: `git tag v<versionName> && git push origin v<versionName>`. A tag with a `-` in it, like `v2.2-beta1`, makes a pre-release.
+3. The [release workflow](.github/workflows/release.yml) builds and tests everything, then waits for your approval on the run's page. Once you approve, it signs the app and publishes the release with the app, remapd on its own and `SHA256SUMS`.
+
+The signing key lives in the repository's `release` environment (Settings → Environments), which only takes `v*` tags and needs a reviewer's approval. It holds two secrets and one variable:
+
+| Name | Kind | What it holds |
+| --- | --- | --- |
+| `RELEASE_KEYSTORE_BASE64` | secret | The keystore file (alias `remapd`), in base64 |
+| `RELEASE_KEYSTORE_PASSWORD` | secret | Its password |
+| `RELEASE_CERT_SHA256` | variable | The key's SHA-256 fingerprint. A release that isn't signed with this key fails. |
+
+Only the job that signs can read them, and it runs none of the repository's code. Keep a backup of the keystore and its password. Without them, a release can't update an installed app; anyone who has them could make an update that gets the app's adb access.
 
 ## Credits
 

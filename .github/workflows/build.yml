@@ -17,7 +17,7 @@ jobs:
           python-version: '3.12'
       - name: Build for Android (static ARM binaries)
         run: |
-          pip install ziglang
+          pip install ziglang==0.17.0
           sh daemon/build.sh
       - uses: actions/upload-artifact@v4
         with:
@@ -36,7 +36,7 @@ jobs:
           python-version: '3.12'
       - name: Build remapd to go inside the app
         run: |
-          pip install ziglang
+          pip install ziglang==0.17.0
           sh daemon/build.sh
       - uses: actions/setup-java@v4
         with:
