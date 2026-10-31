@@ -33,6 +33,27 @@ final class KeyNames {
         return words(key);
     }
 
+    /**
+     * Keys for getting around the TV. Changing a button that sends one can
+     * leave the remote unable to reach this screen to change it back.
+     */
+    static boolean isNavigation(String key) {
+        switch (key) {
+            case "DPAD_UP":
+            case "DPAD_DOWN":
+            case "DPAD_LEFT":
+            case "DPAD_RIGHT":
+            case "DPAD_CENTER":
+            case "ENTER":
+            case "NUMPAD_ENTER":
+            case "BACK":
+            case "HOME":
+                return true;
+            default:
+                return false;
+        }
+    }
+
     /** A name for a button from the Linux key it reports, like "Red" for KEY_RED; "" if it says nothing. */
     static String fromLinux(String key) {
         if (!key.startsWith("KEY_") || key.equals("KEY_UNKNOWN") || key.equals("KEY_RESERVED")) {

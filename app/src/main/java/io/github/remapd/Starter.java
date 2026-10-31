@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Date;
@@ -328,23 +329,38 @@ final class Starter {
     // ---- the buttons screen keeps one connection open -------------------------
 
     private static final long SESSION_IDLE_MS = 10 * 60_000;
-    private static Link session;   // worker thread only
+    /** Set on the worker thread; the main thread only reads it, to cut a session short. */
+    private static volatile Link session;
     private static long sessionUsed;   // worker thread only
+    /** Whether the buttons screen is showing (set on the main thread). */
+    private static volatile boolean sessionWanted;
 
     /** Connects for the buttons screen, and stays connected until {@link #closeSession}. */
     static void openSession(Context context, Progress progress, Callback callback) {
         Context app = context.getApplicationContext();
+        sessionWanted = true;
         submit(() -> {
+            if (!sessionWanted) {
+                return closed(app);
+            }
             if (session == null) {
                 try {
                     session = connect(app, progress != null ? progress : message -> { });
                 } catch (Failure f) {
                     return f.result;
                 }
+                if (!sessionWanted) {   // the screen was left while connecting
+                    closeSessionNow(app);
+                    return closed(app);
+                }
             }
             sessionUsed = SystemClock.elapsedRealtime();
             return new Result(Outcome.OK, "");
         }, callback);
+    }
+
+    private static Result closed(Context c) {
+        return new Result(Outcome.FAILED, c.getString(R.string.buttons_closed));
     }
 
     /**
@@ -357,24 +373,44 @@ final class Starter {
         Progress p = progress != null ? progress : message -> { };
         submit(() -> {
             for (int attempt = 0; ; attempt++) {
+                if (!sessionWanted) {
+                    return closed(app);
+                }
                 if (session == null) {
                     try {
                         session = connect(app, p);
                     } catch (Failure f) {
                         return f.result;
                     }
+                    if (!sessionWanted) {
+                        closeSessionNow(app);
+                        return closed(app);
+                    }
                 }
+                long[] received = {0};
+                AdbConnection.OutputListener counting = data -> {
+                    received[0] += data.length;
+                    if (listener != null) {
+                        listener.output(data);
+                    }
+                };
+                int index = 0;
                 try {
                     String out = "";
-                    for (String command : commands) {
-                        out = session.adb.run(Commands.service(command), timeoutMs, false, listener);
+                    for (index = 0; index < commands.size(); index++) {
+                        out = session.adb.run(Commands.service(commands.get(index)), timeoutMs, false, counting);
                     }
                     sessionUsed = SystemClock.elapsedRealtime();
                     return new Result(Outcome.OK, out.trim());
                 } catch (IOException e) {
                     Log.w(TAG, "the screen's connection failed", e);
                     closeSessionNow(app);
-                    if (attempt > 0) {
+                    if (!sessionWanted) {
+                        return closed(app);
+                    }
+                    // Connect again only if the connection had gone stale: nothing ran yet.
+                    boolean nothingRan = index == 0 && received[0] == 0 && !(e instanceof SocketTimeoutException);
+                    if (attempt > 0 || !nothingRan) {
                         return new Result(Outcome.FAILED, app.getString(R.string.error_failed, e.getMessage()));
                     }
                 }
@@ -382,9 +418,18 @@ final class Starter {
         }, callback);
     }
 
-    /** Disconnects, and switches wireless debugging off if the app switched it on. */
+    /**
+     * Disconnects, and switches wireless debugging off if the app switched it
+     * on. Whatever is running on the connection (like a learn waiting for a
+     * press, with the remotes held) is cut short straight away.
+     */
     static void closeSession(Context context) {
         Context app = context.getApplicationContext();
+        sessionWanted = false;
+        Link s = session;
+        if (s != null) {
+            s.adb.abort();
+        }
         submit(() -> {
             closeSessionNow(app);
             return new Result(Outcome.OK, "");

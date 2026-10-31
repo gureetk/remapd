@@ -348,6 +348,18 @@ public final class AdbConnection implements Closeable {
         plain.close();
     }
 
+    /**
+     * Cuts the connection from another thread (the main one, say): closes the
+     * TCP socket underneath without a TLS goodbye, which doesn't touch the
+     * network, so whatever is running on the connection fails straight away.
+     */
+    public void abort() {
+        try {
+            plain.close();
+        } catch (IOException ignored) {
+        }
+    }
+
     private void send(int command, int arg0, int arg1, byte[] payload) throws IOException {
         out.write(new AdbMessage(command, arg0, arg1, payload).encode());
         out.flush();

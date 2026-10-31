@@ -18,6 +18,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -278,6 +279,18 @@ def run(work):
     fake = Fake(keys, tls=True)
     rc, out = connect(fake, stranger, "ALLOW_PROMPT")
     check(rc == 2 and "PROMPT" not in out, "no prompt is possible over TLS: rejected")
+    fake.stop()
+
+    # The buttons screen cuts its connection from the main thread when it's left,
+    # to stop a wait for a button press. That only closes the socket underneath.
+    fake = Fake(keys, tls=True)
+    rc, out = connect(fake, me, "TLS", services=["~shell:sleep 5; echo late", "shell:echo after"])
+    m = re.search(r"^ABORTED 0 (\d+) ", out, re.M)
+    check(m is not None and int(m.group(1)) < 3000,
+          "aborted from another thread, the running command fails straight away"
+          + (" (%s ms)" % m.group(1) if m else ": " + out))
+    o, e = outputs(out)
+    check(1 in e and not o, "...and so does anything after it")
     fake.stop()
 
     fake = Fake(keys, tls=True, extra=["--drop-after-tls"])

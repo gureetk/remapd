@@ -16,33 +16,55 @@ final class Commands {
     static final String LOG = DIR + "/remapd.log";
 
     /**
+     * A shell function: "ver FILE" prints the version of the remapd in FILE as
+     * one number (1.3 is 1003), from the first line of its usage text
+     * ("remapd 1.3 - ..."), or nothing if it can't tell.
+     */
+    private static final String VERSION_OF = "ver() { s=$(\"$1\" </dev/null 2>/dev/null | head -n 1); "
+            + "case $s in \"remapd \"[0-9]*) ;; *) return;; esac; "
+            + "s=${s#remapd }; s=${s%% *}; a=${s%%.*}; b=${s#\"$a\"}; b=${b#.}; b=${b%%.*}; "
+            + "case $a in *[!0-9]*) return;; esac; case $b in ''|*[!0-9]*) b=0;; esac; "
+            + "echo $((a * 1000 + b)); }; ";
+
+    /**
      * Copies the remapd that comes with the app (bundled: its path in the
      * app's native library folder, which the shell user can read) to
-     * /data/local/tmp when it isn't there or differs. Prints @@updated then.
+     * /data/local/tmp, when there's no remapd there yet or it's older (or
+     * doesn't say its version). Prints @@updated then. A remapd of the same
+     * version or a newer one stays: it can be someone's own build.
      */
     static String install(String bundled) {
         if (bundled == null || !bundled.matches("[A-Za-z0-9_./~=+-]+")) {
             return "true";   // nothing usable to copy
         }
         String next = BIN + ".new";
-        return "if [ -f " + bundled + " ] && ! cmp -s " + bundled + " " + BIN + "; then "
-                + "cp -f " + bundled + " " + next + " && chmod 755 " + next + " && mv -f " + next + " " + BIN
-                + " && echo @@updated; fi";
+        return VERSION_OF
+                + "if [ -f " + bundled + " ] && ! cmp -s " + bundled + " " + BIN + "; then "
+                + "if cp -f " + bundled + " " + next + " && chmod 755 " + next + "; then "
+                + "n=$(ver " + next + "); o=$(ver " + BIN + "); "
+                + "if [ -z \"$o\" ] || { [ -n \"$n\" ] && [ \"$n\" -gt \"$o\" ]; }; then "
+                + "mv -f " + next + " " + BIN + " && echo @@updated; else rm -f " + next + "; fi; "
+                + "fi; fi";
     }
 
-    /** Starts remapd unless it's already running, restarting it if the app brought a different one. */
+    /**
+     * Starts remapd unless it's already running; restarts it when the app
+     * brought a newer one. Needs a remapd.conf (says so otherwise).
+     */
     static String ensure(String bundled) {
-        return "u=$(" + install(bundled) + " 2>&1); "
-                + "if [ ! -x " + BIN + " ]; then echo 'remapd isn'\\''t in " + DIR + " yet.'; exit 1; fi; "
+        return "u=$( (" + install(bundled) + ") 2>&1); "
+                + "if [ ! -x " + BIN + " ]; then [ -n \"$u\" ] && echo \"$u\"; "
+                + "echo 'remapd isn'\\''t in " + DIR + " yet.'; exit 1; fi; "
                 + "if [ ! -f " + CONF + " ]; then echo 'There'\\''s no remapd.conf yet. Set up buttons in the app.'; exit 1; fi; "
-                + "case \"$u\" in *@@updated*) " + BIN + " start " + CONF + ";; "
-                + "*) if " + BIN + " status >/dev/null 2>&1; then echo 'remapd is already running.'; "
+                + "case \"$u\" in *@@updated*) echo 'Updated remapd to the app'\\''s version.'; "
+                + BIN + " start " + CONF + ";; "
+                + "*) [ -n \"$u\" ] && echo \"$u\"; if " + BIN + " status >/dev/null 2>&1; then echo 'remapd is already running.'; "
                 + "else " + BIN + " start " + CONF + "; fi;; esac";
     }
 
-    /** Starts or restarts remapd, with the app's copy of it. */
+    /** Starts or restarts remapd, with the app's copy of it if that's newer. */
     static String start(String bundled) {
-        return install(bundled) + " >/dev/null; " + BIN + " start " + CONF;
+        return "(" + install(bundled) + ") >/dev/null 2>&1; " + BIN + " start " + CONF;
     }
 
     static final String STOP = BIN + " stop";
@@ -132,6 +154,57 @@ final class Commands {
                     + "elif [ -f " + CONF + " ]; then echo @@conf; cat " + CONF + "; "
                     + "else echo @@noconf; fi";
 
+    /**
+     * For the buttons screen: brings remapd up to date and makes sure it's
+     * running (see {@link #ensure}; @@notrunning if it isn't), then
+     * {@link #READ_CONFIG}.
+     */
+    static String openConfig(String bundled) {
+        return "(" + ensure(bundled) + ") || echo @@notrunning; " + READ_CONFIG;
+    }
+
+    /** What {@link #openConfig} printed. */
+    static final class ConfigRead {
+        /** "conf", "noconf", "missing", or "" if the output is something else. */
+        final String marker;
+        /** The config ("" without one). */
+        final String config;
+        /** What came before the marker: messages from updating and starting remapd. */
+        final String notes;
+        /** Whether remapd is running (or was started). */
+        final boolean running;
+
+        ConfigRead(String marker, String config, String notes, boolean running) {
+            this.marker = marker;
+            this.config = config;
+            this.notes = notes;
+            this.running = running;
+        }
+    }
+
+    static ConfigRead parseConfigRead(String output) {
+        StringBuilder notes = new StringBuilder();
+        boolean running = true;
+        int at = 0;
+        while (true) {
+            int nl = output.indexOf('\n', at);
+            String line = nl < 0 ? output.substring(at) : output.substring(at, nl);
+            if (line.equals("@@conf") || line.equals("@@noconf") || line.equals("@@missing")) {
+                return new ConfigRead(line.substring(2), nl < 0 ? "" : output.substring(nl + 1),
+                        notes.toString().trim(), running);
+            }
+            if (line.equals("@@notrunning")) {
+                running = false;
+            } else {
+                notes.append(line).append('\n');
+            }
+            if (nl < 0) {
+                return new ConfigRead("", "", notes.toString().trim(), running);
+            }
+            at = nl + 1;
+        }
+    }
+
     /** Waits for one button press (see remapd's learn command). */
     static String learn(int seconds) {
         return BIN + " learn " + seconds;
@@ -180,11 +253,24 @@ final class Commands {
         return null;
     }
 
+    /** remapd learn's warnings: input devices it couldn't hold on to, so a press on them reached Android. */
+    static List<String> learnWarnings(String output) {
+        List<String> out = new ArrayList<>();
+        for (String line : output.split("\n")) {
+            if (line.startsWith("warning ")) {
+                out.add(line.substring(8).trim());
+            }
+        }
+        return out;
+    }
+
     /**
      * Commands that save a new config and restart remapd with it, if remapd
-     * accepts it (the old one is kept as remapd.conf.bak). The last one prints
-     * @@saved, or @@invalid after remapd's complaints. With no rules left,
-     * remapd is stopped instead, since it won't run without any.
+     * accepts it (the old one is kept as remapd.conf.bak). The last one ends
+     * with a marker: @@saved; @@notstarted (saved, but remapd didn't start,
+     * after what it said); or @@invalid, after remapd's complaints. Anything
+     * else means it couldn't be saved. With no rules left, remapd is stopped
+     * instead, since it won't run without any.
      */
     static List<String> saveConfig(String text) {
         String b64 = Base64.getEncoder().encodeToString(text.getBytes(StandardCharsets.UTF_8));
@@ -199,10 +285,12 @@ final class Commands {
         String swap = "cp -f " + CONF + " " + CONF + ".bak 2>/dev/null; mv -f " + next + " " + CONF;
         commands.add("base64 -d " + tmp + " > " + next + " && rm -f " + tmp + " || exit 1; "
                 + (hasRules
-                ? "if out=$(" + BIN + " check " + next + " 2>&1); then " + swap + " && " + BIN + " start " + CONF
-                        + "; echo @@saved; else echo \"$out\" | grep -i 'line [0-9]' | head -n 20; rm -f " + next
-                        + "; echo @@invalid; fi"
-                : swap + " && " + BIN + " stop; echo @@saved"));
+                // check only complains on stderr; its stdout describes the devices.
+                ? "if out=$(" + BIN + " check " + next + " 2>&1 >/dev/null); then "
+                        + "if " + swap + "; then "
+                        + "if " + BIN + " start " + CONF + "; then echo @@saved; else echo @@notstarted; fi; fi; "
+                        + "else echo \"$out\" | head -n 20; rm -f " + next + "; echo @@invalid; fi"
+                : "if " + swap + "; then " + BIN + " stop; echo @@saved; fi"));
         return commands;
     }
 

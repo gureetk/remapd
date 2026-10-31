@@ -94,21 +94,27 @@ Open **remapd** on the TV and select **Set up**. When the TV asks "Allow USB deb
 - turns off adb's 7-day authorization timeout, like the "Disable adb authorization timeout" developer option. Otherwise the TV would forget the app's key 7 days after setup, since signing in over wireless debugging doesn't count as using it. The setting is for every key the TV has allowed, your computer's too;
 - exempts itself from battery restrictions and from being paused when unused, so Android doesn't hold it back after a restart;
 - checks the TV saved its key ("Always allow"), closes port 5555 again (like `adb usb`) and checks it's closed;
-- puts remapd, which comes inside the app, in `/data/local/tmp`, and starts it the same way it will after a restart;
+- puts remapd, which comes inside the app, in `/data/local/tmp`. If there's a `remapd.conf` already (you've set up buttons before), it starts remapd the same way it will after a restart;
 - turns wireless debugging off. The app switches it on by itself when it needs it; turn it on again in Developer options when you want to use adb from your computer.
 
 The app shows what each step did, and says so if one didn't work.
 
 ### 3. Set up your buttons
 
-Select **Buttons**, then **Add a button**, and press the button on your remote. While the app listens, remapd holds on to the remotes, so the press doesn't do anything on the TV, not even Home. The app shows the button's code, which remote it's on and what Android makes of it, and you choose what it does:
+Select **Buttons**, then **Add a button**, and press the button on your remote. While the app listens, remapd holds on to the TV's input devices, so the press doesn't do anything on the TV (if it can't hold on to one, the app says so). The app shows the button's code, which remote it's on and what Android makes of it, and you choose what it does:
 
 - **Send an Android key**: the colour keys, media and channel keys, Guide, Info and others, or any key Android has;
 - **Open an app** installed on the TV;
 - **Do nothing**: switch the button off;
 - **Run a shell command**, as the ADB shell user.
 
-Select a button in the list to change, rename or remove it. Each change goes into `/data/local/tmp/remapd.conf` (the previous version is kept as `remapd.conf.bak`) and remapd restarts with it. It's the same file you'd [write by hand](#config-reference), and the app keeps the lines it doesn't change, comments included. Wireless debugging stays on while the Buttons screen is open.
+Select a button in the list to change, rename or remove it. Each change goes into `/data/local/tmp/remapd.conf` (the previous version is kept as `remapd.conf.bak`), and remapd restarts with it.
+
+- The first button you set up adds a `device` line for its remote, so remapd leaves your other remotes alone. A button on another remote asks before adding that one too, since every button in the file then works on it as well.
+- The app asks before changing a button you get around the TV with (the arrows, OK, Back and Home).
+- It's the same file you'd [write by hand](#config-reference). The app leaves the lines it doesn't change as they are, comments included; it only drops Windows line endings, a byte-order mark and blank lines at the end. A button with both a `map` line and a `run` or `launch` line keeps its `map` line when you pick another command or app.
+
+Wireless debugging stays on while the Buttons screen is open. It goes off when you leave the screen, or after about 10 minutes without using it.
 
 ## After a restart
 
@@ -222,9 +228,9 @@ One line per button. Codes are the `MSC_SCAN` values from `getevent`, and `#` st
 
 | | |
 | --- | --- |
-| **remapd** | `sh daemon/build.sh` builds static ARM binaries with [zig](https://ziglang.org) (`pip install ziglang` works), with no Android NDK needed, and copies them into the app (`app/src/main/jniLibs`, as `libremapd.so`). Build it before the app: the app installs that copy on the TV. |
+| **remapd** | `sh daemon/build.sh` builds static ARM binaries with [zig](https://ziglang.org) (`pip install ziglang` works), with no Android NDK needed, and copies them into the app (`app/src/main/jniLibs`, as `libremapd.so`). Build it before the app: the app installs that copy on the TV, but only over an older remapd (it compares `VERSION` in `remapd.c`), so raise the version when you change remapd. |
 | **App** | `./gradlew :app:assembleRelease` (JDK 17+ and the Android SDK). Put `storeFile`, `storePassword`, `keyAlias` and `keyPassword` in `keystore.properties` to sign with your own key; otherwise the debug key is used. |
-| **Tests** | `python3 daemon/test/run_tests.py` runs remapd on a Linux PC against a fake remote (gcc and Python 3; no root, no device). `./gradlew :app:testReleaseUnitTest` tests the app's commands (some with a real shell), config editing and adb key handling. `python3 app/adbtest/run_tests.py` runs the app's adb client against a fake adbd (a JDK, and `pip install pyopenssl cryptography adb-shell`); point `CONSCRYPT_JAR` at Conscrypt's `conscrypt-openjdk-uber` jar to also run it with Android's crypto and TLS provider. |
+| **Tests** | `python3 daemon/test/run_tests.py` runs remapd on a Linux PC against a fake remote (gcc and Python 3; no root, no device). `./gradlew :app:testReleaseUnitTest` tests the app's commands (some with a real shell: set `TEST_SH=mksh` to use Android's), config editing and adb key handling. `python3 app/adbtest/run_tests.py` runs the app's adb client against a fake adbd (a JDK, and `pip install pyopenssl cryptography adb-shell`); point `CONSCRYPT_JAR` at Conscrypt's `conscrypt-openjdk-uber` jar to also run it with Android's crypto and TLS provider. |
 | **Tools** | `tools/gen_keynames.py` and `tools/gen_androidkeys.py` regenerate the key name tables; `tools/make_icons.py` redraws the icon, TV banner and README header. |
 
 GitHub Actions runs the tests and builds remapd and the app on every push; the binaries are under each run's artifacts.

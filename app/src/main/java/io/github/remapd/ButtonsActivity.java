@@ -7,7 +7,9 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Typeface;
 import android.os.Bundle;
+import android.text.InputFilter;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -20,7 +22,6 @@ import android.widget.TextView;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -30,8 +31,8 @@ import java.util.Set;
 /**
  * Sets up buttons: press one on the remote, then pick what it does. Edits
  * /data/local/tmp/remapd.conf over adb and restarts remapd with it. While the
- * app listens for a press, remapd holds on to the remotes, so the press
- * doesn't do anything on the TV. Wireless debugging stays on while this
+ * app listens for a press, remapd holds on to the TV's input devices, so the
+ * press doesn't do anything on the TV. Wireless debugging stays on while this
  * screen is open.
  */
 public class ButtonsActivity extends Activity {
@@ -42,6 +43,8 @@ public class ButtonsActivity extends Activity {
     private LinearLayout rows;
     private RemapConfig config;   // null until it's been read
     private boolean busy;
+    /** Counts visits to the screen. What finishes after the screen was left (and maybe opened again) is dropped. */
+    private int visit;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -52,10 +55,12 @@ public class ButtonsActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
+        int v = ++visit;
         setBusy(true);
+        output("");
         status(getString(R.string.buttons_connecting));
-        Starter.openSession(this, this::progress, r -> {
-            if (isDestroyed()) {
+        Starter.openSession(this, progress(v), r -> {
+            if (stale(v)) {
                 return;
             }
             if (!r.ok()) {
@@ -63,24 +68,30 @@ public class ButtonsActivity extends Activity {
                 status(r.output);
                 return;
             }
-            readConfig();
+            readConfig(v);
         });
     }
 
     @Override
     protected void onStop() {
+        // Disconnects, which also cuts short a wait for a press (remapd lets go of the remotes then).
         Starter.closeSession(this);
+        visit++;
         super.onStop();
     }
 
-    private void readConfig() {
+    /** Whether a result is from an earlier visit to the screen. */
+    private boolean stale(int v) {
+        return v != visit || isDestroyed();
+    }
+
+    private void readConfig(int v) {
         setBusy(true);
         status(getString(R.string.buttons_reading));
-        // Brings remapd up to date with the app's copy first (the buttons screen needs its learn command).
-        Starter.sessionRun(this, Arrays.asList(Commands.ensure(Starter.bundledRemapd(this)), Commands.READ_CONFIG),
-                30_000, null,
-                this::progress, r -> {
-                    if (isDestroyed()) {
+        // Brings remapd up to date with the app's copy first (this screen needs its learn command).
+        Starter.sessionRun(this, Collections.singletonList(Commands.openConfig(Starter.bundledRemapd(this))),
+                30_000, null, progress(v), r -> {
+                    if (stale(v)) {
                         return;
                     }
                     setBusy(false);
@@ -88,14 +99,20 @@ public class ButtonsActivity extends Activity {
                         status(r.output);
                         return;
                     }
-                    if (r.output.startsWith("@@missing")) {
-                        config = null;
-                        status(getString(R.string.remapd_missing));
+                    Commands.ConfigRead read = Commands.parseConfigRead(r.output);
+                    if (read.marker.equals("conf") || read.marker.equals("noconf")) {
+                        config = RemapConfig.parse(read.config);
+                        if (read.marker.equals("conf") && !read.running) {
+                            status(getString(R.string.buttons_not_running));   // a mistake in remapd.conf, say
+                            output(read.notes);
+                        } else {
+                            status(getString(R.string.buttons_ready));
+                        }
                     } else {
-                        int nl = r.output.indexOf('\n');
-                        boolean have = r.output.startsWith("@@conf");
-                        config = RemapConfig.parse(have && nl >= 0 ? r.output.substring(nl + 1) : "");
-                        status(getString(R.string.buttons_ready));
+                        config = null;
+                        status(getString(read.marker.equals("missing") ? R.string.buttons_missing
+                                : R.string.buttons_unreadable));
+                        output(read.notes);
                     }
                     showRules();
                 });
@@ -123,6 +140,10 @@ public class ButtonsActivity extends Activity {
     // ---- learning a button -------------------------------------------------------
 
     private void learn() {
+        if (busy || config == null) {
+            return;
+        }
+        int v = visit;
         setBusy(true);
         output("");
         status(getString(R.string.buttons_getting_ready));
@@ -133,12 +154,16 @@ public class ButtonsActivity extends Activity {
                     boolean first = seen.indexOf("listening") < 0;
                     seen.append(new String(data, StandardCharsets.UTF_8));
                     if (first && seen.indexOf("listening") >= 0) {
-                        runOnUiThread(() -> status(getResources().getQuantityString(
-                                R.plurals.buttons_press, LEARN_SECONDS, LEARN_SECONDS)));
+                        runOnUiThread(() -> {
+                            if (!stale(v)) {
+                                status(getResources().getQuantityString(R.plurals.buttons_press,
+                                        LEARN_SECONDS, LEARN_SECONDS));
+                            }
+                        });
                     }
                 },
-                this::progress, r -> {
-                    if (isDestroyed()) {
+                progress(v), r -> {
+                    if (stale(v)) {
                         return;
                     }
                     setBusy(false);
@@ -146,9 +171,14 @@ public class ButtonsActivity extends Activity {
                         status(r.output);
                         return;
                     }
+                    List<String> warnings = Commands.learnWarnings(r.output);
+                    if (!warnings.isEmpty()) {
+                        output(getString(R.string.buttons_not_held) + "\n" + TextUtils.join("\n", warnings));
+                    }
                     Commands.Learned learned = Commands.parseLearned(r.output);
                     if (learned == null) {
-                        status(r.output.contains("timeout") ? getString(R.string.buttons_timeout) : r.output);
+                        status(r.output.matches("(?s)(.*\n)?timeout(\n.*)?") ? getString(R.string.buttons_timeout)
+                                : r.output);
                         return;
                     }
                     if (learned.usage == null) {
@@ -179,6 +209,9 @@ public class ButtonsActivity extends Activity {
                         : getString(R.string.buttons_android_sees, learned.android));
                 if (learned.globalOwner != null) {
                     info.append('\n').append(getString(R.string.buttons_global, learned.globalOwner));
+                }
+                if (KeyNames.isNavigation(learned.android)) {
+                    info.append('\n').append(getString(R.string.buttons_navigation));
                 }
             }
         }
@@ -275,7 +308,8 @@ public class ButtonsActivity extends Activity {
     }
 
     private void askCommand(int usage, String name, RemapConfig.Rule existing, Commands.Learned learned) {
-        EditText input = editText(existing != null && existing.kind == RemapConfig.Kind.RUN ? existing.arg : "");
+        EditText input = editText(existing != null && existing.kind == RemapConfig.Kind.RUN ? existing.arg : "",
+                RemapConfig.MAX_LINE - 100);
         new AlertDialog.Builder(this)
                 .setTitle(R.string.choose_run_title)
                 .setMessage(R.string.choose_run_hint)
@@ -291,46 +325,99 @@ public class ButtonsActivity extends Activity {
     }
 
     private void rename(RemapConfig.Rule rule) {
-        EditText input = editText(rule.label);
+        EditText input = editText(rule.label, 200);
         new AlertDialog.Builder(this)
                 .setTitle(R.string.choose_rename_title)
                 .setView(input)
-                .setPositiveButton(R.string.save, (d, w) ->
-                        save(rule.usage, rule.kind, rule.arg, input.getText().toString(), null))
+                .setPositiveButton(R.string.save, (d, w) -> {
+                    if (busy || config == null) {
+                        return;
+                    }
+                    RemapConfig next = RemapConfig.parse(config.text());
+                    try {
+                        next.rename(rule.usage, input.getText().toString());   // keeps all the button's lines
+                    } catch (IllegalArgumentException e) {
+                        status(e.getMessage());
+                        return;
+                    }
+                    apply(next, "");
+                })
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();
     }
 
     private void remove(int usage) {
+        if (busy || config == null) {
+            return;
+        }
         RemapConfig next = RemapConfig.parse(config.text());
         next.remove(usage);
         apply(next, "");
     }
 
     private void save(int usage, RemapConfig.Kind kind, String arg, String name, Commands.Learned learned) {
-        RemapConfig next = RemapConfig.parse(config.text());
-        String note = "";
-        if (learned != null && (!next.coversDevice(learned.deviceName, learned.vendorProduct)
-                || (next.devices().isEmpty() && next.rules().isEmpty()))) {
-            // remapd only changes the remotes its device lines name (all of them if there are none).
-            next.addDevice(learned.vendorProduct.equals("0000:0000") ? learned.deviceName : learned.vendorProduct);
-            note = getString(R.string.buttons_added_device, learned.deviceName);
+        if (busy || config == null) {
+            return;
         }
+        RemapConfig next = RemapConfig.parse(config.text());
         try {
             next.set(usage, kind, arg, name);
         } catch (IllegalArgumentException e) {
             status(e.getMessage());
             return;
         }
-        apply(next, note);
+        if (learned != null && config.ruleFor(usage) == null && KeyNames.isNavigation(learned.android)) {
+            // Up, OK, Back and so on: changing one can leave this remote unable to get around the TV.
+            String key = KeyNames.android(learned.android);
+            confirm(getString(R.string.buttons_nav_title, key), getString(R.string.buttons_nav_message, key),
+                    getString(R.string.buttons_nav_ok), () -> withDevice(next, learned));
+        } else {
+            withDevice(next, learned);
+        }
+    }
+
+    /**
+     * remapd only changes the remotes remapd.conf lists (every remote, if it
+     * lists none). A new remapd.conf gets a line for the remote the button is
+     * on. Adding a remote to the list asks first: every button set up here
+     * then applies to that remote too.
+     */
+    private void withDevice(RemapConfig next, Commands.Learned learned) {
+        if (busy || config == null) {
+            return;
+        }
+        boolean fresh = config.devices().isEmpty() && config.rules().isEmpty();
+        String filter = learned == null ? ""
+                : learned.vendorProduct.equals("0000:0000") ? learned.deviceName.trim() : learned.vendorProduct;
+        if (filter.isEmpty() || (!fresh && next.coversDevice(learned.deviceName, learned.vendorProduct))) {
+            apply(next, "");
+        } else if (fresh) {
+            next.addDevice(filter);
+            apply(next, getString(R.string.buttons_first_device, learned.deviceName));
+        } else if (next.devices().size() >= RemapConfig.MAX_DEVICES) {
+            status(getResources().getQuantityString(R.plurals.buttons_too_many_devices, RemapConfig.MAX_DEVICES,
+                    RemapConfig.MAX_DEVICES, learned.deviceName));
+        } else {
+            confirm(getString(R.string.buttons_add_device_title, learned.deviceName),
+                    getString(R.string.buttons_add_device_message, TextUtils.join(", ", next.devices()),
+                            learned.deviceName),
+                    getString(R.string.buttons_add_device_ok), () -> {
+                        next.addDevice(filter);
+                        apply(next, getString(R.string.buttons_added_device, learned.deviceName));
+                    });
+        }
     }
 
     private void apply(RemapConfig next, String note) {
+        if (busy) {
+            return;
+        }
+        int v = visit;
         setBusy(true);
         output("");
         status(getString(R.string.buttons_saving));
-        Starter.sessionRun(this, Commands.saveConfig(next.text()), 60_000, null, this::progress, r -> {
-            if (isDestroyed()) {
+        Starter.sessionRun(this, Commands.saveConfig(next.text()), 60_000, null, progress(v), r -> {
+            if (stale(v)) {
                 return;
             }
             setBusy(false);
@@ -338,17 +425,52 @@ public class ButtonsActivity extends Activity {
                 status(r.output);
                 return;
             }
-            if (r.output.endsWith("@@saved")) {
-                config = next;
-                showRules();
-                String done = getString(next.rules().isEmpty() ? R.string.buttons_saved_stopped : R.string.buttons_saved);
-                status(note.isEmpty() ? done : done + " " + note);
-                output(r.output.substring(0, r.output.length() - "@@saved".length()).trim());
-            } else {
-                status(getString(R.string.buttons_invalid));
-                output(r.output.replace("@@invalid", "").trim());
+            String out = r.output;
+            int nl = out.lastIndexOf('\n');
+            String marker = out.substring(nl + 1).trim();
+            String said = nl < 0 ? "" : out.substring(0, nl).trim();
+            switch (marker) {
+                case "@@saved": {
+                    config = next;
+                    showRules();
+                    String done = getString(next.rules().isEmpty() ? R.string.buttons_saved_stopped
+                            : R.string.buttons_saved);
+                    status(note.isEmpty() ? done : done + " " + note);
+                    output(said);
+                    break;
+                }
+                case "@@notstarted":
+                    config = next;
+                    showRules();
+                    status(getString(R.string.buttons_saved_not_started));
+                    output(said);
+                    break;
+                case "@@invalid":
+                    status(getString(R.string.buttons_invalid));
+                    output(said);
+                    break;
+                default:
+                    status(getString(R.string.buttons_save_failed));
+                    output(out);
+                    break;
             }
         });
+    }
+
+    /** Asks before doing something; Cancel has the focus. Dropped if the screen is left in between. */
+    private void confirm(String title, String message, String ok, Runnable onOk) {
+        int v = visit;
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton(ok, (d, w) -> {
+                    if (!stale(v)) {
+                        onOk.run();
+                    }
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus();
     }
 
     // ---- words -----------------------------------------------------------------
@@ -358,19 +480,26 @@ public class ButtonsActivity extends Activity {
     }
 
     private String describe(RemapConfig.Rule r) {
+        String what;
         switch (r.kind) {
             case SEND: {
                 String name = KeyNames.android(r.arg);
                 boolean common = !name.toUpperCase(Locale.ROOT).replace(' ', '_').equals(r.arg);
-                return getString(R.string.action_sends, common ? name + " (" + r.arg + ")" : r.arg);
+                what = getString(R.string.action_sends, common ? name + " (" + r.arg + ")" : r.arg);
+                break;
             }
             case LAUNCH:
-                return getString(R.string.action_opens, appName(r.arg));
+                what = getString(R.string.action_opens, appName(r.arg));
+                break;
             case RUN:
-                return getString(R.string.action_runs, r.arg);
+                what = getString(R.string.action_runs, r.arg);
+                break;
             default:
-                return r.doesNothing() ? getString(R.string.action_nothing) : getString(R.string.action_acts_as, r.arg);
+                what = r.doesNothing() ? getString(R.string.action_nothing) : getString(R.string.action_acts_as, r.arg);
+                break;
         }
+        String also = r.alsoActsAs();   // a map line next to a run or launch line
+        return also == null ? what : getString(R.string.action_and_acts_as, what, also);
     }
 
     private String appName(String pkg) {
@@ -384,9 +513,10 @@ public class ButtonsActivity extends Activity {
 
     // ---- screen ------------------------------------------------------------------
 
-    private void progress(String message) {
-        runOnUiThread(() -> {
-            if (!isDestroyed()) {
+    /** Shows a background step, unless the screen was left since it started. */
+    private Starter.Progress progress(int v) {
+        return message -> runOnUiThread(() -> {
+            if (!stale(v)) {
                 status(message);
             }
         });
@@ -466,10 +596,11 @@ public class ButtonsActivity extends Activity {
         return box;
     }
 
-    private EditText editText(String value) {
+    private EditText editText(String value, int maxLength) {
         EditText input = new EditText(this);
         input.setSingleLine(true);
         input.setInputType(InputType.TYPE_CLASS_TEXT);
+        input.setFilters(new InputFilter[]{new InputFilter.LengthFilter(maxLength)});
         input.setText(value);
         input.setSelection(input.getText().length());
         return input;
