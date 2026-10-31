@@ -4,15 +4,12 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 
-/**
- * Usually Shizuku isn't up yet at boot; it starts this app itself once it is
- * (see Starter). This only covers Shizuku already running by then.
- */
+/** After a restart, asks Android to start remapd once the TV is on Wi-Fi (see StartJob). */
 public class BootReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
-        if (Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction()) && Starter.hasPermission()) {
-            Starter.ensureRunning(context.getString(R.string.reason_boot));
+        if (Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction()) && Starter.isSetUp(context)) {
+            StartJob.schedule(context);
         }
     }
 }
