@@ -92,8 +92,12 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
           CERT_SHA256: ${{ vars.RELEASE_CERT_SHA256 }}
         run: |
-          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$CERT_SHA256" ]; then
-            echo "::error::The release environment needs the RELEASE_KEYSTORE_BASE64 and RELEASE_KEYSTORE_PASSWORD secrets and the RELEASE_CERT_SHA256 variable (see the README)."
+          missing=""
+          [ -n "$KEYSTORE_BASE64" ] || missing="$missing the RELEASE_KEYSTORE_BASE64 secret,"
+          [ -n "$KEYSTORE_PASSWORD" ] || missing="$missing the RELEASE_KEYSTORE_PASSWORD secret,"
+          [ -n "$CERT_SHA256" ] || missing="$missing the RELEASE_CERT_SHA256 variable,"
+          if [ -n "$missing" ]; then
+            echo "::error::The release environment is missing${missing%,} (see \"Making a release\" in the README)."
             exit 1
           fi
           # The fingerprint as keytool shows it (AB:CD:...), maybe with its "SHA256:" label.
@@ -115,12 +119,13 @@ jobs:
             --v4-signing-enabled false --out "release/remapd-$VERSION.apk" files/app.apk
           rm -f "$ks"
 
-          # Signed with that key, and only that key.
+          # Signed with that key, and only that key. apksigner's wording varies between
+          # versions ("Signer #1 certificate SHA-256 digest: ..." or "V3.0 Signer:
+          # certificate SHA-256 digest: ..."), so this takes every signer's certificate.
           "$apksigner" verify --print-certs "release/remapd-$VERSION.apk" | tee certs.txt
-          got=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' certs.txt)
-          signers=$(grep -o '^Signer #[0-9]*' certs.txt | sort -u | wc -l)
-          if [ "$got" != "$want" ] || [ "$signers" != 1 ]; then
-            echo "::error::The signed app's certificate ($got) isn't the one RELEASE_CERT_SHA256 names ($want)."
+          got=$(sed -n 's/.*[Ss]igner.*certificate SHA-256 digest: *\([0-9a-f]*\).*/\1/p' certs.txt | sort -u)
+          if [ "$got" != "$want" ]; then
+            echo "::error::The app's signing certificates ($(printf '%s' "$got" | tr '\n' ' ')) aren't just the one RELEASE_CERT_SHA256 names ($want)."
             exit 1
           fi
           echo "CERT=$(printf '%s' "$got" | tr 'a-f' 'A-F' | sed 's/../&:/g; s/:$//')" >> "$GITHUB_ENV"
