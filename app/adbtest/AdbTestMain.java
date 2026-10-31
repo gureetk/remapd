@@ -21,7 +21,9 @@ import java.util.Base64;
  *       Connects to 127.0.0.1:PORT with DIR's key. MODE is TLS,
  *       SIGNATURE_ONLY or ALLOW_PROMPT. Runs each SERVICE ("!" in front: it
  *       may drop the connection) and prints "OUT <n> <base64>" or
- *       "ERR <n> <message>" for each.
+ *       "ERR <n> <message>" for each. With "~" in front, another thread
+ *       aborts the connection a second in, and it prints
+ *       "ABORTED <n> <milliseconds until the service failed> <message>".
  *
  * With -Dadbtest.conscrypt=true, Conscrypt (Android's crypto and TLS
  * provider) goes first, so it does the RSA, certificates and TLS, as on a TV.
@@ -61,20 +63,36 @@ public final class AdbTestMain {
         }
         System.out.println("BANNER " + c.banner());
         System.out.println("PROVIDER " + Security.getProviders()[0].getName());
+        AdbConnection conn = c;
         try {
             for (int i = 5; i < args.length; i++) {
                 boolean ends = args[i].startsWith("!");
-                String service = ends ? args[i].substring(1) : args[i];
+                boolean abort = args[i].startsWith("~");
+                String service = ends || abort ? args[i].substring(1) : args[i];
+                if (abort) {
+                    new Thread(() -> {
+                        try {
+                            Thread.sleep(1000);
+                        } catch (InterruptedException ignored) {
+                        }
+                        conn.abort();
+                    }).start();
+                }
+                long start = System.nanoTime();
                 try {
                     String out = c.run(service, 20000, ends);
                     System.out.println("OUT " + (i - 5) + " " + Base64.getEncoder()
                             .encodeToString(out.getBytes(StandardCharsets.UTF_8)));
                 } catch (IOException e) {
-                    System.out.println("ERR " + (i - 5) + " " + e.getMessage());
+                    System.out.println((abort ? "ABORTED " : "ERR ") + (i - 5) + " "
+                            + (abort ? (System.nanoTime() - start) / 1_000_000 + " " : "") + e.getMessage());
                 }
             }
         } finally {
-            c.close();
+            try {
+                c.close();
+            } catch (IOException ignored) {   // after an abort
+            }
         }
     }
 

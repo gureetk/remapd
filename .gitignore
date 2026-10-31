@@ -17,6 +17,7 @@ keystore.properties
 daemon/remapd
 daemon/remapd-arm64
 daemon/remapd-native
+app/src/main/jniLibs/
 daemon/test/remapd-test
 daemon/test/sandbox/
 daemon/test/fake/

@@ -1,6 +1,7 @@
 package io.github.remapd;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.util.TypedValue;
@@ -13,7 +14,7 @@ import android.widget.TextView;
 /** Sets up starting remapd after a restart, shows whether it's running, and starts or stops it. */
 public class MainActivity extends Activity {
     private TextView setupView, startView, usbView, remapdView, lastView, outputView, logView;
-    private Button setUpButton, startButton, stopButton, checkButton, setUpAgainButton;
+    private Button setUpButton, buttonsButton, startButton, stopButton, checkButton, setUpAgainButton;
     private final Runnable onChange = this::refresh;
 
     @Override
@@ -57,16 +58,17 @@ public class MainActivity extends Activity {
         lastView.setText(Starter.lastSummary(this));
 
         setUpButton.setVisibility(setUp ? View.GONE : View.VISIBLE);
-        for (Button b : new Button[]{startButton, stopButton, checkButton, setUpAgainButton}) {
+        for (Button b : new Button[]{buttonsButton, startButton, stopButton, checkButton, setUpAgainButton}) {
             b.setVisibility(setUp ? View.VISIBLE : View.GONE);
         }
-        for (Button b : new Button[]{setUpButton, startButton, stopButton, checkButton, setUpAgainButton}) {
+        for (Button b : new Button[]{setUpButton, buttonsButton, startButton, stopButton, checkButton,
+                setUpAgainButton}) {
             b.setEnabled(!busy);
         }
 
         View focused = getCurrentFocus();
         if (focused == null || focused.getVisibility() != View.VISIBLE || !focused.isEnabled()) {
-            (setUp ? startButton : setUpButton).requestFocus();
+            (setUp ? buttonsButton : setUpButton).requestFocus();
         }
     }
 
@@ -158,17 +160,22 @@ public class MainActivity extends Activity {
         lastView.setAlpha(0.8f);
         root.addView(lastView, spaced(0, 20));
 
-        LinearLayout buttons = new LinearLayout(this);
-        buttons.setOrientation(LinearLayout.HORIZONTAL);
         setUpButton = button(R.string.set_up, v -> setUp());
-        startButton = button(R.string.start, v -> run(Commands.START));
+        buttonsButton = button(R.string.buttons, v -> startActivity(new Intent(this, ButtonsActivity.class)));
+        startButton = button(R.string.start, v -> run(Commands.start(Starter.bundledRemapd(this))));
         stopButton = button(R.string.stop, v -> run(Commands.STOP));
         checkButton = button(R.string.check, v -> checkStatus());
         setUpAgainButton = button(R.string.set_up_again, v -> setUp());
-        for (Button b : new Button[]{setUpButton, startButton, stopButton, checkButton, setUpAgainButton}) {
-            buttons.addView(b, spaced(dp(12), 0));
+        LinearLayout row1 = new LinearLayout(this);
+        for (Button b : new Button[]{setUpButton, buttonsButton, startButton, stopButton}) {
+            row1.addView(b, spaced(dp(12), 0));
         }
-        root.addView(buttons, spaced(0, 16));
+        root.addView(row1, spaced(0, 8));
+        LinearLayout row2 = new LinearLayout(this);
+        for (Button b : new Button[]{checkButton, setUpAgainButton}) {
+            row2.addView(b, spaced(dp(12), 0));
+        }
+        root.addView(row2, spaced(0, 16));
 
         outputView = mono();
         root.addView(outputView, spaced(0, 12));

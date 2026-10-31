@@ -439,6 +439,89 @@ check(rc == 0 and "(Can't find the key layout file Android would use for a virtu
 check("sends Android PROG_RED (with the slower input keyevent: no key layout file has no line for it)" not in out
       and "sends Android PROG_RED (with the slower input keyevent" in out, "fallback wording without a key layout file")
 
+print("\nK. learn: one press, with the devices grabbed")
+reset()
+remote = make_remote()
+cc = make_dev("event2", "Chromecast Remote", 0x0957, 0x0001, {0x0c008d: 365})
+os.makedirs(sbx("/vendor/usr/keylayout"), exist_ok=True)
+open(sbx(VENDOR_KL), "w").write(VENDOR_KL_TEXT)
+open(sbx("/vendor/usr/keylayout/Vendor_0957_Product_0001.kl"), "w").write("key 365 GUIDE\n")
+make_dev("event50", "remapd virtual remote", 0, 0, {})
+
+def learn(secs, then=None):
+    p = subprocess.Popen([REMAPD, "learn", str(secs)], env=ENV, stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT, text=True)
+    time.sleep(0.6)
+    t0 = time.time()
+    if then:
+        then()
+    rc = p.wait(timeout=secs + 10)
+    return rc, p.stdout.read(), time.time() - t0
+
+rc, out, took = learn(10, lambda: press(remote, 0x0c0069)); print(out)
+check(rc == 0 and "learned 000c0069 KEY_RED 0508:0110 UNKNOWN - ACE666BT Keyboard\n" in out,
+      "learn: Red, which Android doesn't recognise")
+check(took < 3, "learn: done as soon as the button is let go (%.1f s)" % took)
+grabs = [l for l in readf("ioctl.log").splitlines() if l.startswith("GRAB")]
+ino = os.stat(remote).st_ino
+check(f"GRAB ino={ino} 1" in grabs and f"GRAB ino={ino} 0" in grabs, "learn: grabs the remote, then lets go")
+check(grabs.count(f"GRAB ino={ino} 1") == grabs.count(f"GRAB ino={ino} 0"), "learn: lets go of every node it grabbed")
+vino = os.stat(sbx("/dev/input/event50")).st_ino
+check(not any(f"ino={vino} " in l for l in grabs), "learn: leaves the virtual remote alone")
+
+rc, out, _ = learn(10, lambda: press(remote, 0x0c00ea)); print(out)
+check(rc == 0 and "learned 000c00ea KEY_VOLUMEDOWN 0508:0110 VOLUME_DOWN - ACE666BT Keyboard\n" in out,
+      "learn: a key Android knows")
+rc, out, _ = learn(10, lambda: press(cc, 0x0c008d)); print(out)
+check(rc == 0 and "learned 000c008d KEY_EPG 0957:0001 GUIDE com.google.android.tvlauncher/.GlobalKeyReceiver Chromecast Remote\n" in out,
+      "learn: another remote, and a key the system keeps for itself")
+
+def press_without_scan():
+    fd = os.open(remote, os.O_WRONLY | os.O_NONBLOCK)
+    os.write(fd, EV.pack(0, 0, 1, 108, 1) + EV.pack(0, 0, 0, 0, 0) + EV.pack(0, 0, 1, 108, 0) + EV.pack(0, 0, 0, 0, 0))
+    os.close(fd)
+rc, out, _ = learn(10, press_without_scan); print(out)
+check(rc == 0 and "learned none KEY_DOWN 0508:0110 DPAD_DOWN - ACE666BT Keyboard\n" in out,
+      "learn: a press without a scan code says so")
+def combo():
+    """A button that sends a key combination (Meta+E), like some app buttons do."""
+    fd = os.open(remote, os.O_WRONLY | os.O_NONBLOCK)
+    os.write(fd, EV.pack(0, 0, 4, 4, 0x700e3) + EV.pack(0, 0, 1, 125, 1) + EV.pack(0, 0, 4, 4, 0x70008)
+             + EV.pack(0, 0, 1, 18, 1) + EV.pack(0, 0, 0, 0, 0)
+             + EV.pack(0, 0, 4, 4, 0x70008) + EV.pack(0, 0, 1, 18, 0) + EV.pack(0, 0, 4, 4, 0x700e3)
+             + EV.pack(0, 0, 1, 125, 0) + EV.pack(0, 0, 0, 0, 0))
+    os.close(fd)
+rc, out, _ = learn(10, combo); print(out)
+check(rc == 0 and "learned 00070008 KEY_E 0508:0110 " in out, "learn: a key combination is learned as its key, not the modifier")
+
+def new_remote():
+    """A remote that was asleep reconnects as a new node, then the press arrives."""
+    other = make_dev("event12", "Sleepy Remote", 0x1234, 0x5678, {0x0c0030: 116})
+    time.sleep(0.5)
+    press(other, 0x0c0030)
+rc, out, _ = learn(10, new_remote); print(out)
+check(rc == 0 and "learned 000c0030 KEY_POWER 1234:5678 POWER - Sleepy Remote" in out,
+      "learn: listens to a remote that connects while it waits")
+sino = os.stat(sbx("/dev/input/event12")).st_ino
+grabs = [l for l in readf("ioctl.log").splitlines() if l.startswith("GRAB")]
+check(f"GRAB ino={sino} 1" in grabs and f"GRAB ino={sino} 0" in grabs, "learn: grabs it too, and lets go")
+
+open(f"{FAKE}/ioctl.log", "w").close()
+p = subprocess.Popen([REMAPD, "learn", "10"], env=ENV, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+time.sleep(0.6)
+p.stdout.close()   # the app went away
+try:
+    rc = p.wait(timeout=4)
+except subprocess.TimeoutExpired:
+    p.kill(); rc = None
+grabs = [l for l in readf("ioctl.log").splitlines() if l.startswith("GRAB")]
+check(rc == 1 and f"GRAB ino={ino} 0" in grabs, "learn: stops and lets go when whoever started it goes away")
+
+rc, out, took = learn(1); print(out)
+check(rc == 3 and out.strip().endswith("timeout"), "learn: nothing pressed -> timeout")
+rc, out = rd(["learn", "0"])
+check(rc == 2 and "remapd learn" in out, "learn: refuses a silly time")
+
 shutil.rmtree(SBX, ignore_errors=True)
 shutil.rmtree(FAKE, ignore_errors=True)
 print("\nFAILURES:", fails)

@@ -3,7 +3,7 @@
  *
  * State per FIFO inode lives in $FAKE_DIR/<ino>.dev:
  *   name <text> / id <vendor hex> <product hex> / usage <hex> <keycode>
- * Every keymap change is appended to $FAKE_DIR/ioctl.log, and uinput calls to
+ * Every keymap change and grab is appended to $FAKE_DIR/ioctl.log, and uinput calls to
  * $FAKE_DIR/uinput.log. Events written to the virtual device land in the
  * /dev/uinput file itself. Creating the virtual device adds a FIFO node
  * /dev/input/event50 named like it (no keymap), destroying it removes it.
@@ -189,6 +189,10 @@ int ioctl(int fd, unsigned long req, ...)
 			}
 			errno = EINVAL;
 			return -1;
+		}
+		if (req == EVIOCGRAB) {
+			logf_("ioctl.log", "GRAB ino=%lu %ld\n", (unsigned long)st.st_ino, (long)arg);
+			return 0;
 		}
 		errno = ENOTTY;
 		return -1;
