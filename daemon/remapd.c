@@ -52,7 +52,7 @@
 #include "keynames.h"
 #include "androidkeys.h"
 
-#define VERSION     "1.2"
+#define VERSION     "1.3"
 #define VIRT_NAME   "remapd virtual remote"
 #define STATE_DIR   "/data/local/tmp"
 #define PID_FILE    STATE_DIR "/remapd.pid"
@@ -1783,6 +1783,152 @@ static int cmd_check(const char *conf)
 	return 0;
 }
 
+/* Waits for one button press, with every input device grabbed so the press
+ * doesn't do anything on the TV (even Home), and says which button it was:
+ *   learned <usage|none> <KEY_NAME|number> <vendor:product> <Android key|UNKNOWN|?> <global owner|-> <device name>
+ * or "timeout". The devices are handed back as soon as the button is let go. */
+static int cmd_learn(int seconds)
+{
+	int nums[MAX_DEVS * 2], fds[MAX_DEVS * 2], idx[MAX_DEVS * 2];
+	struct pollfd pfd[MAX_DEVS * 2];
+	unsigned scan[MAX_DEVS * 2];
+	int have[MAX_DEVS * 2];
+	struct dev d;
+	int i, n, nd = 0, found = -1, code = -1, released = 0;
+	unsigned usage = 0;
+	long long deadline;
+	struct sigaction sa;
+
+	n = list_event_nodes(nums, MAX_DEVS * 2);
+	if (n < 0) {
+		printf("error can't read %s: %s\n", INPUT_DIR, strerror(errno));
+		return 1;
+	}
+	for (i = 0; i < n; i++) {
+		char path[64], name[128];
+		unsigned vendor, product;
+		int fd;
+
+		snprintf(path, sizeof path, "%s/event%d", INPUT_DIR, nums[i]);
+		fd = open(fs(path), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+		if (fd < 0)
+			continue;
+		identify(fd, name, sizeof name, &vendor, &product, NULL);
+		if (!strcmp(name, VIRT_NAME)) {
+			close(fd);
+			continue;
+		}
+		if (ioctl(fd, EVIOCGRAB, 1) < 0 && verbose)
+			fprintf(stderr, "event%d: couldn't grab it (%s); its press will also reach Android\n",
+				nums[i], strerror(errno));
+		fds[nd] = fd;
+		idx[nd] = nums[i];
+		pfd[nd].fd = fd;
+		pfd[nd].events = POLLIN;
+		have[nd] = 0;
+		nd++;
+	}
+	if (!nd) {
+		printf("error no input devices to listen to\n");
+		return 1;
+	}
+
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = on_quit;
+	sigaction(SIGINT, &sa, NULL);
+	sigaction(SIGTERM, &sa, NULL);
+	sigaction(SIGHUP, &sa, NULL);
+	sa.sa_handler = SIG_IGN;
+	sigaction(SIGPIPE, &sa, NULL);
+	printf("listening for %d seconds: press the button\n", seconds);
+	fflush(stdout);
+
+	deadline = now_ms() + seconds * 1000LL;
+	while (!quit_flag && !released) {
+		long long left = deadline - now_ms();
+
+		if (left <= 0)
+			break;
+		if (poll(pfd, nd, (int)left) < 0) {
+			if (errno == EINTR)
+				continue;
+			break;
+		}
+		for (i = 0; i < nd && !released; i++) {
+			struct raw_event ev[64];
+			ssize_t r;
+			size_t j;
+
+			if (!(pfd[i].revents & POLLIN)) {
+				if (pfd[i].revents & (POLLERR | POLLHUP | POLLNVAL))
+					pfd[i].fd = -1;   /* gone (the remote disconnected) */
+				continue;
+			}
+			r = read(fds[i], ev, sizeof ev);
+			if (r == 0 || (r < 0 && errno != EAGAIN && errno != EINTR)) {
+				pfd[i].fd = -1;
+				continue;
+			}
+			for (j = 0; r > 0 && j < (size_t)r / sizeof ev[0]; j++) {
+				if (ev[j].type == EV_MSC && ev[j].code == MSC_SCAN) {
+					scan[i] = (unsigned)ev[j].value;
+					have[i] = 1;
+				} else if (ev[j].type == EV_SYN) {
+					have[i] = 0;
+				} else if (ev[j].type == EV_KEY && ev[j].value == 1 && found < 0) {
+					found = i;
+					code = ev[j].code;
+					usage = have[i] ? scan[i] : 0;
+					/* Hold on to the devices until the button is let go. */
+					if (deadline > now_ms() + 3000)
+						deadline = now_ms() + 3000;
+				} else if (ev[j].type == EV_KEY && ev[j].value == 0 && i == found &&
+					   ev[j].code == code) {
+					released = 1;
+					break;
+				}
+			}
+		}
+	}
+	for (i = 0; i < nd; i++) {
+		ioctl(fds[i], EVIOCGRAB, 0);
+		close(fds[i]);
+	}
+	if (found < 0) {
+		printf("timeout\n");
+		return 3;
+	}
+
+	/* What Android makes of it now (for a button remapd already changes, after the change). */
+	memset(&d, 0, sizeof d);
+	snprintf(d.path, sizeof d.path, "%s/event%d", INPUT_DIR, idx[found]);
+	{
+		int fd = open(fs(d.path), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+
+		if (fd >= 0) {
+			identify(fd, d.name, sizeof d.name, &d.vendor, &d.product, &d.version);
+			close(fd);
+		}
+	}
+	{
+		const struct klfile *k = kl_for(&d);
+		const char *key = k ? kl_lookup(k, usage, code) : NULL;
+		const char *owner = key ? global_key_owner(key) : NULL;
+		const char *kn = key_name(code);
+		char u[16];
+
+		if (!strncmp(kn, "key ", 4))
+			kn += 4;
+		if (usage)
+			snprintf(u, sizeof u, "%08x", usage);
+		else
+			snprintf(u, sizeof u, "none");
+		printf("learned %s %s %04x:%04x %s %s %s\n", u, kn, d.vendor, d.product,
+		       key ? key : (k ? "UNKNOWN" : "?"), owner ? owner : "-", d.name);
+	}
+	return 0;
+}
+
 static int cmd_list(void)
 {
 	int nums[MAX_DEVS * 2];
@@ -1819,7 +1965,9 @@ static void usage(void)
 	       "                       becomes (Ctrl+C to stop)\n"
 	       "  remapd start CONF    apply CONF in the background (log: %s)\n"
 	       "  remapd stop          stop the background copy and restore the buttons\n"
-	       "  remapd status        is the background copy running?\n",
+	       "  remapd status        is the background copy running?\n"
+	       "  remapd learn [SECS]  wait for one button press (default 15 s) and say which\n"
+	       "                       button it was; the press doesn't reach Android\n",
 	       VERSION, LOG_FILE);
 }
 
@@ -1842,6 +1990,12 @@ int main(int argc, char **argv)
 		return cmd_stop(0);
 	if (!strcmp(cmd, "status") && argc == 2)
 		return cmd_status();
+	if (!strcmp(cmd, "learn") && (argc == 2 || argc == 3)) {
+		int secs = argc == 3 ? atoi(argv[2]) : 15;
+
+		if (secs >= 1 && secs <= 60)
+			return cmd_learn(secs);
+	}
 	if (argc == 3) {
 		if (!strcmp(cmd, "check"))
 			return cmd_check(argv[2]);

@@ -441,5 +441,54 @@ check("sends Android PROG_RED (with the slower input keyevent: no key layout fil
 
 shutil.rmtree(SBX, ignore_errors=True)
 shutil.rmtree(FAKE, ignore_errors=True)
+print("\nK. learn: one press, with the devices grabbed")
+reset()
+remote = make_remote()
+cc = make_dev("event2", "Chromecast Remote", 0x0957, 0x0001, {0x0c008d: 365})
+os.makedirs(sbx("/vendor/usr/keylayout"), exist_ok=True)
+open(sbx(VENDOR_KL), "w").write(VENDOR_KL_TEXT)
+open(sbx("/vendor/usr/keylayout/Vendor_0957_Product_0001.kl"), "w").write("key 365 GUIDE\n")
+make_dev("event50", "remapd virtual remote", 0, 0, {})
+
+def learn(secs, then=None):
+    p = subprocess.Popen([REMAPD, "learn", str(secs)], env=ENV, stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT, text=True)
+    time.sleep(0.6)
+    t0 = time.time()
+    if then:
+        then()
+    rc = p.wait(timeout=secs + 10)
+    return rc, p.stdout.read(), time.time() - t0
+
+rc, out, took = learn(10, lambda: press(remote, 0x0c0069)); print(out)
+check(rc == 0 and "learned 000c0069 KEY_RED 0508:0110 UNKNOWN - ACE666BT Keyboard\n" in out,
+      "learn: Red, which Android doesn't recognise")
+check(took < 3, "learn: done as soon as the button is let go (%.1f s)" % took)
+grabs = [l for l in readf("ioctl.log").splitlines() if l.startswith("GRAB")]
+ino = os.stat(remote).st_ino
+check(f"GRAB ino={ino} 1" in grabs and f"GRAB ino={ino} 0" in grabs, "learn: grabs the remote, then lets go")
+check(grabs.count(f"GRAB ino={ino} 1") == grabs.count(f"GRAB ino={ino} 0"), "learn: lets go of every node it grabbed")
+vino = os.stat(sbx("/dev/input/event50")).st_ino
+check(not any(f"ino={vino} " in l for l in grabs), "learn: leaves the virtual remote alone")
+
+rc, out, _ = learn(10, lambda: press(remote, 0x0c00ea)); print(out)
+check(rc == 0 and "learned 000c00ea KEY_VOLUMEDOWN 0508:0110 VOLUME_DOWN - ACE666BT Keyboard\n" in out,
+      "learn: a key Android knows")
+rc, out, _ = learn(10, lambda: press(cc, 0x0c008d)); print(out)
+check(rc == 0 and "learned 000c008d KEY_EPG 0957:0001 GUIDE com.google.android.tvlauncher/.GlobalKeyReceiver Chromecast Remote\n" in out,
+      "learn: another remote, and a key the system keeps for itself")
+
+def press_without_scan():
+    fd = os.open(remote, os.O_WRONLY | os.O_NONBLOCK)
+    os.write(fd, EV.pack(0, 0, 1, 108, 1) + EV.pack(0, 0, 0, 0, 0) + EV.pack(0, 0, 1, 108, 0) + EV.pack(0, 0, 0, 0, 0))
+    os.close(fd)
+rc, out, _ = learn(10, press_without_scan); print(out)
+check(rc == 0 and "learned none KEY_DOWN 0508:0110 DPAD_DOWN - ACE666BT Keyboard\n" in out,
+      "learn: a press without a scan code says so")
+rc, out, took = learn(1); print(out)
+check(rc == 3 and out.strip().endswith("timeout"), "learn: nothing pressed -> timeout")
+rc, out = rd(["learn", "0"])
+check(rc == 2 and "remapd learn" in out, "learn: refuses a silly time")
+
 print("\nFAILURES:", fails)
 sys.exit(1 if fails else 0)

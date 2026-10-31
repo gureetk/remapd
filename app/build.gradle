@@ -41,6 +41,14 @@ android {
         }
     }
 
+    // remapd itself rides along as lib/<abi>/libremapd.so (see daemon/build.sh).
+    // Unpacked on install, so the adb shell user can copy it to /data/local/tmp.
+    packaging {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_11
         targetCompatibility JavaVersion.VERSION_11

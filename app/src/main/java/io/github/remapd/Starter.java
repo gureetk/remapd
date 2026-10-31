@@ -131,6 +131,11 @@ final class Starter {
         return false;
     }
 
+    /** The remapd that comes with the app, where Android unpacked it (the shell user can read it there). */
+    static String bundledRemapd(Context c) {
+        return c.getApplicationInfo().nativeLibraryDir + "/libremapd.so";
+    }
+
     /** Whether remapd was started successfully since the TV last restarted. */
     static boolean startedThisBoot(Context c) {
         return prefs(c).getInt("ok_boot", -1) == bootCount(c);
@@ -188,7 +193,7 @@ final class Starter {
     static Result ensureBlocking(Context c, String reason, Progress progress) {
         Result r = virtualRemotePresent(c)
                 ? new Result(Outcome.OK, c.getString(R.string.already_running))
-                : runBlocking(c, Commands.ENSURE, progress);
+                : runBlocking(c, Commands.ensure(bundledRemapd(c)), progress);
         remember(c, reason, r);
         return r;
     }
@@ -196,29 +201,76 @@ final class Starter {
     /** Runs a shell command as the shell user, over wireless debugging. */
     static Result runBlocking(Context c, String command, Progress progress) {
         Progress p = progress != null ? progress : message -> { };
+        if (session != null) {
+            // The buttons screen has a connection open: use it.
+            try {
+                p.step(c.getString(R.string.step_running));
+                String out = session.adb.run(Commands.service(command), COMMAND_TIMEOUT_MS, false);
+                sessionUsed = SystemClock.elapsedRealtime();
+                return new Result(Outcome.OK, out.trim());
+            } catch (IOException e) {
+                Log.w(TAG, "the open connection failed; connecting again", e);
+                closeSessionNow(c);
+            }
+        }
+        Link link;
+        try {
+            link = connect(c, p);
+        } catch (Failure f) {
+            return f.result;
+        }
+        try {
+            p.step(c.getString(R.string.step_running));
+            String out = link.adb.run(Commands.service(command), COMMAND_TIMEOUT_MS, false);
+            return new Result(Outcome.OK, out.trim());
+        } catch (IOException e) {
+            Log.w(TAG, "adb failed", e);
+            return new Result(Outcome.FAILED, c.getString(R.string.error_failed, e.getMessage()));
+        } finally {
+            release(c, link);
+        }
+    }
+
+    /** An open connection to adbd, and whether wireless debugging was on before. */
+    private static final class Link {
+        final AdbConnection adb;
+        final boolean usersOwn;
+
+        Link(AdbConnection adb, boolean usersOwn) {
+            this.adb = adb;
+            this.usersOwn = usersOwn;
+        }
+    }
+
+    /**
+     * Connects over wireless debugging, switching it on if it's off. Someone
+     * else's wireless debugging is left as it is; the app's own is switched
+     * off again by {@link #release}, or straight away if this fails.
+     */
+    private static Link connect(Context c, Progress p) throws Failure {
         ContentResolver cr = c.getContentResolver();
         if (!isSetUp(c)) {
-            return new Result(Outcome.NOT_SET_UP, c.getString(R.string.error_not_set_up));
+            throw new Failure(Outcome.NOT_SET_UP, c.getString(R.string.error_not_set_up));
         }
         if (!WirelessDebugging.usbDebuggingOn(cr)) {
-            return new Result(Outcome.USB_DEBUGGING_OFF, c.getString(R.string.error_usb_off));
+            throw new Failure(Outcome.USB_DEBUGGING_OFF, c.getString(R.string.error_usb_off));
         }
         AdbIdentity id;
         try {
             id = AppKey.load(c);
         } catch (GeneralSecurityException | IOException e) {
             Log.w(TAG, "can't read the adb key", e);
-            return new Result(Outcome.NOT_SET_UP, c.getString(R.string.error_key, e.getMessage()));
+            throw new Failure(Outcome.NOT_SET_UP, c.getString(R.string.error_key, e.getMessage()));
         }
         if (id == null) {
-            return new Result(Outcome.NOT_SET_UP, c.getString(R.string.error_not_set_up));
+            throw new Failure(Outcome.NOT_SET_UP, c.getString(R.string.error_not_set_up));
         }
 
-        // Someone else's wireless debugging is left as it is; the app's own is switched off after.
         boolean usersOwn = WirelessDebugging.onByUser(c);
         if (!usersOwn && !WirelessDebugging.isOn(cr) && !WirelessDebugging.onWifi(c)) {
-            return new Result(Outcome.NO_WIFI, c.getString(R.string.error_no_wifi));
+            throw new Failure(Outcome.NO_WIFI, c.getString(R.string.error_no_wifi));
         }
+        boolean connected = false;
         boolean awaitingApproval = false;
         try {
             if (!usersOwn) {
@@ -228,28 +280,26 @@ final class Starter {
                 WirelessDebugging.turnOnForApp(c);
             }
             p.step(c.getString(R.string.step_finding));
-            try (AdbConnection adb = findAndConnect(c, cr, id, p)) {
-                p.step(c.getString(R.string.step_running));
-                String out = adb.run(Commands.service(command), COMMAND_TIMEOUT_MS, false);
-                return new Result(Outcome.OK, out.trim());
-            }
+            AdbConnection adb = findAndConnect(c, cr, id, p);
+            connected = true;
+            return new Link(adb, usersOwn);
         } catch (Failure f) {
             awaitingApproval = f.result.outcome == Outcome.NETWORK_NOT_ALLOWED;
-            return f.result;
+            throw f;
         } catch (AdbAuthException e) {
             Log.w(TAG, "adbd rejected the key", e);
-            return new Result(Outcome.KEY_REJECTED, c.getString(R.string.error_key_rejected));
+            throw new Failure(Outcome.KEY_REJECTED, c.getString(R.string.error_key_rejected));
         } catch (IOException e) {
             Log.w(TAG, "adb failed", e);
-            return new Result(Outcome.FAILED, c.getString(R.string.error_failed, e.getMessage()));
+            throw new Failure(Outcome.FAILED, c.getString(R.string.error_failed, e.getMessage()));
         } catch (SecurityException e) {   // the permission was taken away
             Log.w(TAG, "can't change settings", e);
-            return new Result(Outcome.NOT_SET_UP, c.getString(R.string.error_not_set_up));
+            throw new Failure(Outcome.NOT_SET_UP, c.getString(R.string.error_not_set_up));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return new Result(Outcome.FAILED, c.getString(R.string.error_failed, "interrupted"));
+            throw new Failure(Outcome.FAILED, c.getString(R.string.error_failed, "interrupted"));
         } finally {
-            if (!usersOwn) {
+            if (!connected && !usersOwn) {
                 try {
                     if (awaitingApproval) {
                         WirelessDebugging.awaitApproval(c);
@@ -259,6 +309,93 @@ final class Starter {
                 } catch (SecurityException ignored) {
                 }
             }
+        }
+    }
+
+    private static void release(Context c, Link link) {
+        try {
+            link.adb.close();
+        } catch (IOException ignored) {
+        }
+        if (!link.usersOwn) {
+            try {
+                WirelessDebugging.turnOffForApp(c);
+            } catch (SecurityException ignored) {
+            }
+        }
+    }
+
+    // ---- the buttons screen keeps one connection open -------------------------
+
+    private static final long SESSION_IDLE_MS = 10 * 60_000;
+    private static Link session;   // worker thread only
+    private static long sessionUsed;   // worker thread only
+
+    /** Connects for the buttons screen, and stays connected until {@link #closeSession}. */
+    static void openSession(Context context, Progress progress, Callback callback) {
+        Context app = context.getApplicationContext();
+        submit(() -> {
+            if (session == null) {
+                try {
+                    session = connect(app, progress != null ? progress : message -> { });
+                } catch (Failure f) {
+                    return f.result;
+                }
+            }
+            sessionUsed = SystemClock.elapsedRealtime();
+            return new Result(Outcome.OK, "");
+        }, callback);
+    }
+
+    /**
+     * Runs commands one after another over the screen's connection (connecting
+     * again once if it dropped) and returns the last one's output.
+     */
+    static void sessionRun(Context context, List<String> commands, int timeoutMs,
+                           AdbConnection.OutputListener listener, Progress progress, Callback callback) {
+        Context app = context.getApplicationContext();
+        Progress p = progress != null ? progress : message -> { };
+        submit(() -> {
+            for (int attempt = 0; ; attempt++) {
+                if (session == null) {
+                    try {
+                        session = connect(app, p);
+                    } catch (Failure f) {
+                        return f.result;
+                    }
+                }
+                try {
+                    String out = "";
+                    for (String command : commands) {
+                        out = session.adb.run(Commands.service(command), timeoutMs, false, listener);
+                    }
+                    sessionUsed = SystemClock.elapsedRealtime();
+                    return new Result(Outcome.OK, out.trim());
+                } catch (IOException e) {
+                    Log.w(TAG, "the screen's connection failed", e);
+                    closeSessionNow(app);
+                    if (attempt > 0) {
+                        return new Result(Outcome.FAILED, app.getString(R.string.error_failed, e.getMessage()));
+                    }
+                }
+            }
+        }, callback);
+    }
+
+    /** Disconnects, and switches wireless debugging off if the app switched it on. */
+    static void closeSession(Context context) {
+        Context app = context.getApplicationContext();
+        submit(() -> {
+            closeSessionNow(app);
+            return new Result(Outcome.OK, "");
+        }, null);
+    }
+
+    private static void closeSessionNow(Context c) {
+        Link s = session;
+        session = null;
+        if (s != null) {
+            release(c, s);
         }
     }
 
@@ -404,7 +541,7 @@ final class Starter {
         // way it'll start after a restart, which tests that.
         SystemClock.sleep(3000);
         p.step(c.getString(R.string.step_testing));
-        Result r = runBlocking(c, Commands.ENSURE, p);
+        Result r = runBlocking(c, Commands.ensure(bundledRemapd(c)), p);
         remember(c, c.getString(R.string.reason_setup), r);
         // The app doesn't need wireless debugging left on: it switches it on when it needs it.
         if (WirelessDebugging.isOn(cr) && !WirelessDebugging.awaitingApproval(c)) {
@@ -477,6 +614,14 @@ final class Starter {
     static Result followUpBlocking(Context c) {
         ContentResolver cr = c.getContentResolver();
         Result nothing = new Result(Outcome.OK, "");
+        if (session != null) {
+            if (SystemClock.elapsedRealtime() - sessionUsed < SESSION_IDLE_MS) {
+                StartJob.scheduleCleanup(c);   // the buttons screen is using it; check again later
+                return nothing;
+            }
+            closeSessionNow(c);   // left open and unused
+            return nothing;
+        }
         if (!WirelessDebugging.onByApp(c)) {
             WirelessDebugging.forget(c);
             return nothing;
@@ -491,7 +636,7 @@ final class Starter {
         }
         Result r = virtualRemotePresent(c)
                 ? new Result(Outcome.OK, c.getString(R.string.already_running))
-                : runBlocking(c, Commands.ENSURE, null);
+                : runBlocking(c, Commands.ensure(bundledRemapd(c)), null);
         if (WirelessDebugging.onByApp(c) && !WirelessDebugging.awaitingApproval(c)) {
             try {
                 WirelessDebugging.turnOffForApp(c);

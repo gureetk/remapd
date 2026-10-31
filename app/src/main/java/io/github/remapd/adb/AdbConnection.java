@@ -261,6 +261,11 @@ public final class AdbConnection implements Closeable {
         out = ssl.getOutputStream();
     }
 
+    /** Gets a service's output as it arrives. */
+    public interface OutputListener {
+        void output(byte[] data);
+    }
+
     /**
      * Opens an adb service, like "shell:ls", and returns everything it prints
      * until it closes.
@@ -269,6 +274,12 @@ public final class AdbConnection implements Closeable {
      *                       where the connection may drop instead of closing the stream
      */
     public String run(String service, int timeoutMs, boolean endsConnection) throws IOException {
+        return run(service, timeoutMs, endsConnection, null);
+    }
+
+    /** Like {@link #run(String, int, boolean)}, also handing each piece of output to a listener. */
+    public String run(String service, int timeoutMs, boolean endsConnection, OutputListener listener)
+            throws IOException {
         int localId = nextLocalId++;
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         int remoteId = 0;
@@ -309,6 +320,9 @@ public final class AdbConnection implements Closeable {
                                     + MAX_OUTPUT / 1024 + " KB");
                         }
                         output.write(m.payload, 0, m.payload.length);
+                        if (listener != null) {
+                            listener.output(m.payload);
+                        }
                         send(A_OKAY, localId, m.arg0, EMPTY);   // ready for more
                         break;
                     case A_CLSE:

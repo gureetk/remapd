@@ -1,5 +1,10 @@
 package io.github.remapd;
 
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.List;
+
 /**
  * The shell commands the app runs over adb, and how it reads their output.
  * Plain Java (no Android classes) so it can be tested on a computer.
@@ -10,13 +15,36 @@ final class Commands {
     static final String CONF = DIR + "/remapd.conf";
     static final String LOG = DIR + "/remapd.log";
 
-    /** Starts remapd unless it's already running. */
-    static final String ENSURE =
-            "if [ ! -x " + BIN + " ]; then echo 'remapd isn'\\''t in " + DIR + " yet.'; exit 1; fi; "
-                    + "if " + BIN + " status >/dev/null 2>&1; then echo 'remapd is already running.'; "
-                    + "else " + BIN + " start " + CONF + "; fi";
+    /**
+     * Copies the remapd that comes with the app (bundled: its path in the
+     * app's native library folder, which the shell user can read) to
+     * /data/local/tmp when it isn't there or differs. Prints @@updated then.
+     */
+    static String install(String bundled) {
+        if (bundled == null || !bundled.matches("[A-Za-z0-9_./~=+-]+")) {
+            return "true";   // nothing usable to copy
+        }
+        String next = BIN + ".new";
+        return "if [ -f " + bundled + " ] && ! cmp -s " + bundled + " " + BIN + "; then "
+                + "cp -f " + bundled + " " + next + " && chmod 755 " + next + " && mv -f " + next + " " + BIN
+                + " && echo @@updated; fi";
+    }
 
-    static final String START = BIN + " start " + CONF;
+    /** Starts remapd unless it's already running, restarting it if the app brought a different one. */
+    static String ensure(String bundled) {
+        return "u=$(" + install(bundled) + " 2>&1); "
+                + "if [ ! -x " + BIN + " ]; then echo 'remapd isn'\\''t in " + DIR + " yet.'; exit 1; fi; "
+                + "if [ ! -f " + CONF + " ]; then echo 'There'\\''s no remapd.conf yet. Set up buttons in the app.'; exit 1; fi; "
+                + "case \"$u\" in *@@updated*) " + BIN + " start " + CONF + ";; "
+                + "*) if " + BIN + " status >/dev/null 2>&1; then echo 'remapd is already running.'; "
+                + "else " + BIN + " start " + CONF + "; fi;; esac";
+    }
+
+    /** Starts or restarts remapd, with the app's copy of it. */
+    static String start(String bundled) {
+        return install(bundled) + " >/dev/null; " + BIN + " start " + CONF;
+    }
+
     static final String STOP = BIN + " stop";
 
     /** remapd's status line, then @@-markers the app reads, then the end of the log. */
@@ -96,7 +124,89 @@ final class Commands {
         return new Status(marker, text.toString().trim(), log.toString().trim());
     }
 
-    /** One line saying what an ENSURE run did. */
+    // ---- the buttons screen ----------------------------------------------------
+
+    /** "@@conf" and the config, "@@noconf" if there's none yet, or "@@missing" without remapd. */
+    static final String READ_CONFIG =
+            "if [ ! -x " + BIN + " ]; then echo @@missing; "
+                    + "elif [ -f " + CONF + " ]; then echo @@conf; cat " + CONF + "; "
+                    + "else echo @@noconf; fi";
+
+    /** Waits for one button press (see remapd's learn command). */
+    static String learn(int seconds) {
+        return BIN + " learn " + seconds;
+    }
+
+    /** A button remapd learned. */
+    static final class Learned {
+        /** The HID usage, or null if the button sent none (remapd can't use it then). */
+        final Integer usage;
+        /** The Linux key it reports now, like KEY_RED (or a number). */
+        final String linuxKey;
+        /** Like 0508:0110. */
+        final String vendorProduct;
+        /** What Android makes of it now: an Android key, UNKNOWN, or "?" if remapd couldn't tell. */
+        final String android;
+        /** Who gets the key instead of apps, if the system keeps it for itself; null if nobody. */
+        final String globalOwner;
+        final String deviceName;
+
+        Learned(Integer usage, String linuxKey, String vendorProduct, String android,
+                String globalOwner, String deviceName) {
+            this.usage = usage;
+            this.linuxKey = linuxKey;
+            this.vendorProduct = vendorProduct;
+            this.android = android;
+            this.globalOwner = globalOwner;
+            this.deviceName = deviceName;
+        }
+    }
+
+    /**
+     * Reads remapd learn's answer:
+     * "learned <usage|none> <key> <vendor:product> <android> <owner|-> <device name>".
+     * Null if nothing was pressed (or the output is something else).
+     */
+    static Learned parseLearned(String output) {
+        for (String line : output.split("\n")) {
+            String[] w = line.trim().split(" ", 7);
+            if (w.length < 6 || !w[0].equals("learned")) {
+                continue;
+            }
+            Integer usage = w[1].equals("none") ? null : RemapConfig.parseUsage(w[1]);
+            return new Learned(usage, w[2], w[3], w[4], w[5].equals("-") ? null : w[5],
+                    w.length > 6 ? w[6] : "");
+        }
+        return null;
+    }
+
+    /**
+     * Commands that save a new config and restart remapd with it, if remapd
+     * accepts it (the old one is kept as remapd.conf.bak). The last one prints
+     * @@saved, or @@invalid after remapd's complaints. With no rules left,
+     * remapd is stopped instead, since it won't run without any.
+     */
+    static List<String> saveConfig(String text) {
+        String b64 = Base64.getEncoder().encodeToString(text.getBytes(StandardCharsets.UTF_8));
+        String tmp = CONF + ".b64";
+        String next = CONF + ".new";
+        List<String> commands = new ArrayList<>();
+        for (int i = 0; i == 0 || i < b64.length(); i += 3000) {
+            String part = b64.substring(i, Math.min(b64.length(), i + 3000));
+            commands.add("printf '%s' '" + part + "' " + (i == 0 ? ">" : ">>") + " " + tmp);
+        }
+        boolean hasRules = !RemapConfig.parse(text).rules().isEmpty();
+        String swap = "cp -f " + CONF + " " + CONF + ".bak 2>/dev/null; mv -f " + next + " " + CONF;
+        commands.add("base64 -d " + tmp + " > " + next + " && rm -f " + tmp + " || exit 1; "
+                + (hasRules
+                ? "if out=$(" + BIN + " check " + next + " 2>&1); then " + swap + " && " + BIN + " start " + CONF
+                        + "; echo @@saved; else echo \"$out\" | grep -i 'line [0-9]' | head -n 20; rm -f " + next
+                        + "; echo @@invalid; fi"
+                : swap + " && " + BIN + " stop; echo @@saved"));
+        return commands;
+    }
+
+    /** One line saying what an ensure() run did. */
     static String summarize(String output) {
         if (output.contains("running in the background")) {
             return "started";

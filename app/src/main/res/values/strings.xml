@@ -3,7 +3,7 @@
     <string name="app_name">remapd</string>
     <string name="subtitle">Keeps your remote\'s extra buttons working. remapd starts by itself after a restart, and whenever you open this app.</string>
 
-    <string name="setup_steps">One-time setup, with a computer:\n1. Copy remapd and remapd.conf to /data/local/tmp with adb (see the README).\n2. On the computer, run:  adb tcpip 5555\n3. Select Set up. When the TV asks \"Allow USB debugging?\", tick \"Always allow from this computer\" and select Allow.\n\nThe app then lets itself switch wireless debugging on and off, turns off adb\'s 7-day authorization timeout (for every key) so its key keeps working, exempts itself from battery restrictions, closes port 5555 and starts remapd. Finally it turns wireless debugging off: it switches it on by itself when it needs it.</string>
+    <string name="setup_steps">One-time setup, with a computer:\n1. On the computer, run:  adb tcpip 5555\n2. Select Set up. When the TV asks \"Allow USB debugging?\", tick \"Always allow from this computer\" and select Allow.\n\nThe app then lets itself switch wireless debugging on and off, turns off adb\'s 7-day authorization timeout (for every key) so its key keeps working, exempts itself from battery restrictions, closes port 5555, puts remapd in /data/local/tmp and starts it. Finally it turns wireless debugging off: it switches it on by itself when it needs it. After that, set up your buttons with Buttons.</string>
 
     <string name="start_ready">Starts after a restart: yes.</string>
     <string name="start_not_set_up">Starts after a restart: not set up yet.</string>
@@ -13,6 +13,7 @@
     <string name="remapd_noconf">There\'s no /data/local/tmp/remapd.conf yet. Copy your config there with adb first.</string>
 
     <string name="set_up">Set up</string>
+    <string name="buttons">Buttons</string>
     <string name="set_up_again">Set up again</string>
     <string name="start">Start or restart remapd</string>
     <string name="stop">Stop remapd</string>
@@ -57,4 +58,51 @@
     <string name="error_grant">Couldn\'t give the app the permission it needs: %1$s</string>
     <string name="error_key">Couldn\'t read the app\'s key (%1$s). Select Set up again.</string>
     <string name="error_failed">Failed: %1$s</string>
+
+    <!-- The buttons screen -->
+    <string name="buttons_title">Buttons</string>
+    <string name="buttons_intro">Select Add a button, then press the button on your remote; while the app listens, the press doesn\'t do anything on the TV. Select a button in the list to change it. Changes go into /data/local/tmp/remapd.conf (the previous one is kept as remapd.conf.bak) and remapd restarts with them. Wireless debugging stays on while this screen is open.</string>
+    <string name="buttons_add">Add a button</string>
+    <string name="buttons_connecting">Connecting…</string>
+    <string name="buttons_reading">Reading remapd.conf…</string>
+    <string name="buttons_ready">Ready.</string>
+    <string name="buttons_none">No buttons set up yet.</string>
+    <string name="buttons_getting_ready">Getting ready to listen…</string>
+    <plurals name="buttons_press">
+        <item quantity="one">Press the button you want to set up (within %1$d second).</item>
+        <item quantity="other">Press the button you want to set up (within %1$d seconds).</item>
+    </plurals>
+    <string name="buttons_timeout">No button was pressed.</string>
+    <string name="buttons_no_code">That button (%1$s) doesn\'t send a code remapd can use, so it can\'t be set up here.</string>
+    <string name="buttons_on_device">On %1$s (%2$s).</string>
+    <string name="buttons_android_sees">Android sees it as %1$s.</string>
+    <string name="buttons_android_unknown">Android doesn\'t recognise it, so apps ignore it.</string>
+    <string name="buttons_android_cant_tell">Couldn\'t tell what Android makes of it.</string>
+    <string name="buttons_global">The system keeps that key for itself (%1$s), so apps never get it.</string>
+    <string name="buttons_now">Now it %1$s.</string>
+    <string name="buttons_saving">Saving, and restarting remapd…</string>
+    <string name="buttons_saved">Saved, and remapd restarted.</string>
+    <string name="buttons_saved_stopped">Saved. With no buttons left, remapd is stopped.</string>
+    <string name="buttons_invalid">remapd didn\'t accept that, so nothing changed:</string>
+    <string name="buttons_added_device">Also added %1$s to the remotes remapd changes.</string>
+
+    <string name="choose_send">Send an Android key…</string>
+    <string name="choose_app">Open an app…</string>
+    <string name="choose_nothing">Do nothing</string>
+    <string name="choose_run">Run a shell command…</string>
+    <string name="choose_rename">Rename…</string>
+    <string name="choose_remove">Leave it to Android (remove it from remapd.conf)</string>
+    <string name="choose_more_keys">More keys…</string>
+    <string name="choose_key_title">Send which key?</string>
+    <string name="choose_app_title">Open which app?</string>
+    <string name="choose_run_title">Shell command</string>
+    <string name="choose_run_hint">Runs as the adb shell user each time the button is pressed.</string>
+    <string name="choose_rename_title">Name for this button</string>
+    <string name="save">Save</string>
+
+    <string name="action_sends">sends %1$s</string>
+    <string name="action_opens">opens %1$s</string>
+    <string name="action_runs">runs %1$s</string>
+    <string name="action_nothing">does nothing</string>
+    <string name="action_acts_as">acts as %1$s</string>
 </resources>
