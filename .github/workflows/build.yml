@@ -9,17 +9,17 @@ jobs:
   daemon:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Test against a fake remote
         run: python3 daemon/test/run_tests.py
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Build for Android (static ARM binaries)
         run: |
           pip install ziglang==0.17.0
           sh daemon/build.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: remapd
           path: |
@@ -30,19 +30,21 @@ jobs:
   app:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Build remapd to go inside the app
         run: |
           pip install ziglang==0.17.0
           sh daemon/build.sh
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic   # open source; the default is a closed-source add-on under Gradle's terms
       - name: Test and build the app
         run: ./gradlew :app:testReleaseUnitTest :app:assembleRelease
       - name: Run the app's shell commands with mksh too (Android's shell)
@@ -57,7 +59,7 @@ jobs:
             https://repo1.maven.org/maven2/org/conscrypt/conscrypt-openjdk-uber/2.5.2/conscrypt-openjdk-uber-2.5.2.jar
           echo "eaf537d98e033d0f0451cd1b8cc74e02d7b55ec882da63c88060d806ba89c348  app/adbtest/build/conscrypt.jar" | sha256sum -c -
           CONSCRYPT_JAR=$PWD/app/adbtest/build/conscrypt.jar python3 app/adbtest/run_tests.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: remapd-app
           path: app/build/outputs/apk/release/*.apk
