@@ -73,10 +73,8 @@ def share_image(tmp):
     mono = ImageFont.truetype(ttf_from_woff2("space-mono-latin-700-normal.woff2", tmp), 40 * s)
     mono_small = ImageFont.truetype(ttf_from_woff2("space-mono-latin-400-normal.woff2", tmp), 28 * s)
     display = ImageFont.truetype(ttf_from_woff2("familjen-grotesk-latin-wght-normal.woff2", tmp), 92 * s)
-    sub = ImageFont.truetype(ttf_from_woff2("familjen-grotesk-latin-wght-normal.woff2", tmp), 34 * s)
-    try:  # the Familjen file is a variable font: ask for bold and regular
+    try:  # the Familjen file is a variable font: ask for bold
         display.set_variation_by_axes([700])
-        sub.set_variation_by_axes([400])
     except Exception:
         pass
 
@@ -90,7 +88,6 @@ def share_image(tmp):
     # headline
     d.text((left, 190 * s), "Every button on your", font=display, fill=INK, anchor="la")
     d.text((left, 190 * s + 104 * s), "TV remote, working.", font=display, fill=INK, anchor="la")
-    d.text((left, 190 * s + 104 * s + 150 * s), "For Android TV and Google TV. No root.", font=sub, fill=MUTED, anchor="la")
 
     d.text((left, 560 * s), "remapd.gureet.ca", font=mono_small, fill=MUTED, anchor="lm")
     return img.resize((w, h), Image.LANCZOS)
